@@ -80,10 +80,13 @@ KB_IDS = [x for x in os.environ.get('SECRETARY_KB_IDS', 'r57xtq9ypm').replace(' 
 TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').split(',') if x]
 
 # 系统提示从 ai_data.ai_prompt 注入（取 IS_new=1 的最新版），不在代码里写死。
-# 可用 key：answer_agent / business_rules / sql_writer_agent / task_data_intent_agent /
-#           question_splitter / intent_agent / sql_audit_agent ...（见 ai_prompt 表）
+# 列表里不存在的 key 会自动跳过，所以可以先接好槽位、等内容补上就自动生效。
+#   answer_agent   回答规则（含那 10 条必须遵守）
+#   business_rules 共享业务规则（deleted_flag / 单位 / 层级 / 时间处理）
+#   sql_plan_rules ←【待他们新增】「先拆解任务、再一次性发出互不依赖的查询」这条约束
+#                    （原 `question_splitter` 目前是“原样透传、不做补全”，不能直接用）
 PROMPTS = [x for x in os.environ.get('SECRETARY_PROMPTS',
-                                       'answer_agent,business_rules').replace(' ', '').split(',') if x]
+    'answer_agent,business_rules,sql_plan_rules').replace(' ', '').split(',') if x]
 
 # 上游补全应用已不在链路里：上游只补时间与地点，问题补全由本服务在模型循环里做（见 agent.py）。
 

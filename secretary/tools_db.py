@@ -58,6 +58,10 @@ def _exec_once(sql, params, limit_rows):
     return {'columns': cols, 'rows': rows, 'row_count': len(rows)}
 
 
+# 只有这几种错误才值得重连重试（连接断了）；SQL 语法/字段名错误重试没有意义
+_RETRY_ERRNOS = (2006, 2013, 2055)
+
+
 def _exec(sql, params=None, limit_rows=config.SQL_MAX_ROWS):
     """所有取数都走这里；只允许 SELECT / WITH —— 本服务对业务库与字典表都是只读。"""
     low = ' '.join(str(sql).split()).lower()
@@ -65,9 +69,14 @@ def _exec(sql, params=None, limit_rows=config.SQL_MAX_ROWS):
         raise ValueError('只读：不允许执行非 SELECT 语句')
     try:
         return _exec_once(sql, params, limit_rows)
-    except (pymysql.err.InterfaceError, pymysql.err.OperationalError):
+    except pymysql.err.InterfaceError:
         _drop_conn()
         return _exec_once(sql, params, limit_rows)
+    except pymysql.err.OperationalError as e:
+        if e.args and e.args[0] in _RETRY_ERRNOS:
+            _drop_conn()
+            return _exec_once(sql, params, limit_rows)
+        raise
 
 
 def safe_select(sql):
@@ -90,7 +99,17 @@ def run_sql(sql):
     if bad:
         return {'error': '这些表不在业务字典里，不能查：' + '、'.join(sorted(bad)) + '。' + semantic.hint(),
                 'sql': s, 'columns': [], 'rows': [], 'row_count': 0}
-    r = _exec(s)
+    try:
+        r = _exec(s)
+    except Exception as e:
+        # 把该表的可用字段一起回给模型，省掉一轮“猜字段名”的试错
+        hint = ''
+        for t in sorted(semantic.tables_in_sql(s))[:1]:
+            cols = list(semantic.table_cols(t).keys())
+            if cols:
+                hint = '表 %s 在业务字典里登记的字段：%s' % (t, '、'.join(cols[:40]))
+        return {'error': str(e)[:300], 'hint': hint, 'sql': s,
+                'columns': [], 'rows': [], 'row_count': 0}
     r['sql'] = s
     return r
 
