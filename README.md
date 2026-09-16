@@ -25,9 +25,11 @@
     set SECRETARY_HOST=0.0.0.0      # 局域网可访问（或双击根目录 启动局域网服务.bat）
     py -X utf8 server.py
 
+**第一次跑先配凭据**：把根目录的 `.env.example` 复制成同目录的 `.env`，填 6 个必填项 —— `DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / LLM_BASE_URL / LLM_API_KEY`。`.env` 已被 `.gitignore` 忽略，不会进仓库。
+
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| SECRETARY_ENV | D:\skill回答后端\.env | DB 与模型端点凭据来源 |
+| SECRETARY_ENV | 项目根目录的 .env | DB 与模型端点凭据来源；不填就用本项目根目录的 .env |
 | SECRETARY_HOST / SECRETARY_PORT | 127.0.0.1 / 8200 | 监听地址与端口 |
 | SECRETARY_MODEL | qwen3.8-max | 模型，页面下拉 26 个可选 |
 | SECRETARY_MAX_STEPS | 0 | 工具步数上限，0 = 不限（模型自己收手） |

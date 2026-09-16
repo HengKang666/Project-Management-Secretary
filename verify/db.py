@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """只读业务库访问 + SQL 安全闸。除了只读，这里不固化成任何业务规则。"""
+import os
 import re
 import threading
 import pymysql
 
-ENV_PATH = r'D:\skill回答后端\.env'
+HERE = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.environ.get('SECRETARY_ENV', os.path.join(os.path.dirname(HERE), '.env'))
 
 
 def load_env(path=ENV_PATH):

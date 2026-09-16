@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""配置：从原项目 .env 读端点，模型可用环境变量切换。"""
+"""配置：读本项目根目录的 .env（默认），模型可用环境变量切换。"""
 import os
 
-ENV_PATH = os.environ.get('SECRETARY_ENV', r'D:\skill回答后端\.env')
+HERE = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.environ.get('SECRETARY_ENV', os.path.join(os.path.dirname(HERE), '.env'))
 
 
 def load_env(path=ENV_PATH):

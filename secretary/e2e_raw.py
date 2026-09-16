@@ -46,10 +46,10 @@ def measure(d, seconds):
     }
 
 
-def run(q, complete):
+def run(q):
     t0 = time.time()
     try:
-        d = agent.ask(q, complete=complete, max_steps=0)
+        d = agent.ask(q, max_steps=0)
     except Exception as e:
         d = {'answer': 'EXC ' + type(e).__name__ + ' ' + str(e), 'trace': [], 'timings': {}}
     m = measure(d, time.time() - t0)
@@ -61,7 +61,7 @@ def run(q, complete):
 rows = []
 print('=== 原话（走完整流程：补全 → 查库 → 回答）===')
 for i, (cat, q) in enumerate(RAW, 1):
-    m = run(q, True)
+    m = run(q)
     m['category'] = cat
     rows.append(m)
     print('[%2d/%d] %s' % (i, len(RAW), q))
@@ -71,9 +71,9 @@ for i, (cat, q) in enumerate(RAW, 1):
         m['seconds'], (m['completion_ms'] or 0)/1000, (m['loop_ms'] or 0)/1000,
         m['tools'], m['budget_calls'], m['rounds'], m['max_parallel']))
     print()
-print('=== 补全后的问题（只跑我们这侧）===')
+print('=== 复杂题 ===')
 for cat, q in COMPLEX:
-    m = run(q, False)
+    m = run(q)
     m['category'] = cat
     rows.append(m)
     print('   答：%s' % str(m.get('answer')).replace(chr(10), ' ')[:400])

@@ -4,6 +4,7 @@
 .env
 *.env
 .env.*
+!.env.example
 .credentials.yaml
 
 # 一次性侦察脚本：含生产服务器地址与 root 口令

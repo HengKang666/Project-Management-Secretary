@@ -64,7 +64,7 @@ def main():
     for i, (cat, q) in enumerate(qs, 1):
         t0 = time.time()
         try:
-            d = agent.ask(q, complete=False, max_steps=0)
+            d = agent.ask(q, max_steps=0)
         except Exception as e:
             d = {'answer': 'EXC ' + type(e).__name__ + ' ' + str(e), 'trace': [], 'timings': {}}
         m = measure(d)
