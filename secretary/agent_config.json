@@ -1,0 +1,48 @@
+{
+ "rerank_top_n": 5,
+ "kb_search_configs": [
+  {
+   "id": "uxht00z9ey",
+   "name": "项目管理秘书口径库",
+   "desc": "指标口径：公式/数据源表/字段/粒度/缺口规则",
+   "weight": 1,
+   "credibility_level": "medium",
+   "rerank_min_score": 0.2,
+   "rerank_top_n": 5,
+   "dense_similarity_top_k": 50,
+   "sparse_similarity_top_k": 50,
+   "enable_rewrite": true,
+   "rerank": {
+    "rerank_instruct": "",
+    "model_name": "qwen3-rerank",
+    "rerank_mode": "qa"
+   }
+  },
+  {
+   "id": "igjhr8giyb",
+   "name": "ai大脑业务知识库",
+   "desc": "政务业务，电力局，集团，酒店",
+   "weight": 1,
+   "credibility_level": "medium",
+   "rerank_min_score": 0.2,
+   "rerank_top_n": 5,
+   "dense_similarity_top_k": 50,
+   "sparse_similarity_top_k": 50,
+   "enable_rewrite": true,
+   "rerank": {
+    "rerank_instruct": "",
+    "model_name": "qwen3-rerank",
+    "rerank_mode": "qa"
+   }
+  }
+ ],
+ "kb_router_timeout_ms": 5000,
+ "hybrid_rerank": {
+  "rerank_instruct": "",
+  "model_name": "qwen3-rerank",
+  "rerank_mode": "qa"
+ },
+ "agent_policy": "turbo",
+ "enable_kb_router": false,
+ "kb_router_model": "qwen-plus-latest"
+}

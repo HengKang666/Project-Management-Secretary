@@ -1,0 +1,121 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<style>body{font-family:"Microsoft YaHei",system-ui,sans-serif;background:#fff;padding:14px;margin:0}
+ h2{font-size:13px;color:#12539f;margin:12px 0 6px;border-left:4px solid #1a6fd4;padding-left:8px}
+ pre.mermaid{background:#fafbfc;border:1px solid #e6e8eb;border-radius:8px;padding:10px;margin:0 0 18px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+</head><body>
+<h2>图 0</h2><pre class="mermaid">flowchart LR
+    A["🎤 麦克风 / 音频文件"] --&gt;|"原始二进制"| B["语音识别&lt;br/&gt;Fun-ASR（百炼）"]
+    B --&gt;|"识别文本"| C["上游问题补全应用&lt;br/&gt;百炼 app e20764…"]
+    C --&gt;|"标准问题"| D["agent 模型自主循环"]
+    D --&gt;|"答案 + 工具轨迹"| E["页面：左栏回答 / 右栏全过程"]
+    D --&gt;|"答不了"| F["缺口清单&lt;br/&gt;交上游补知识 / 补指标"]
+    style B fill:#eef6ff,stroke:#1a6fd4
+    style C fill:#f4f1ff,stroke:#7a5af8
+    style D fill:#eefaf1,stroke:#0f9d58
+    style F fill:#fff3cd,stroke:#e8842c</pre>
+<h2>图 1</h2><pre class="mermaid">flowchart TD
+    subgraph 入口
+      MIC["🎤 麦克风录音 / 上传音频"] --&gt; ASR["Fun-ASR 语音识别&lt;br/&gt;五阶段（见 图 4）"]
+      TXT["✍️ 直接输入文字"] --&gt; API
+      ASR --&gt;|"识别文本"| API["POST /api/ask 或 /api/asr"]
+    end
+
+    API --&gt; CH{"补全缓存命中？"}
+    CH --&gt;|"命中（省 7–19 秒）"| LOOP
+    CH --&gt;|"未命中"| CMP["① 上游问题补全（百炼 app）&lt;br/&gt;口语问法 → 标准问题"] --&gt; LOOP
+
+    subgraph LOOP["② agent.py 模型自主循环（≤12 步）"]
+      direction TB
+      L1["组装 messages = 系统提示(5 条底线) + 问题"] --&gt; L2["调 qwen 系列模型（26 个可选）"]
+      L2 --&gt;|"tool_calls"| L3["逐个执行工具"]
+      L3 --&gt;|"结果回灌"| L2
+      L2 --&gt;|"无 tool_calls 且用过工具"| L4["最终回答"]
+      L2 --&gt;|"无 tool_calls 且零工具"| L5["提醒一次"] -.-&gt;|"仍不调"| L6["拦下：未核实，不予作答"]
+    end
+
+    L3 --&gt; KB["kb_search"]
+    L3 --&gt; DBQ["find_column / list_tables / describe_table / run_sql"]
+
+    KB --&gt; KBS["百炼知识检索服务&lt;br/&gt;口径库 · 电力业务口径文档 · 数据地图 · 业务知识库"]
+    DBQ --&gt; GATE["只读安全闸&lt;br/&gt;SELECT only · 禁分号注释 · LIMIT 200 · 25s&lt;br/&gt;每线程连接 + ping 探活 + 断了重连"]
+    GATE --&gt; MYSQL[("业务库 dlj_data&lt;br/&gt;133 张表 / 1956 字段")]
+
+    L4 --&gt; OUT["{ answer, trace[], 分段耗时, 计数, unverified }"]
+    L6 --&gt; OUT
+    ASR -.-&gt;|"每阶段原始请求与返回"| OUT
+    OUT --&gt; PAGE["页面：左栏回答 · 右栏工具轨迹与各阶段明细"]
+    OUT --&gt; GAPS["③ 缺口清单 output/gaps/gaps.jsonl&lt;br/&gt;「查不到 / 未核实」自动落库&lt;br/&gt;GET /api/gaps 可导出"]
+    GAPS -.-&gt;|"每周给上游：该补知识还是该补指标"| CMP</pre>
+<h2>图 2</h2><pre class="mermaid">flowchart TD
+    Q["标准问题（已补全）"] --&gt; Q1{"先弄清口径/术语？"}
+    Q1 --&gt;|"是"| KS["kb_search 查知识库"]
+    Q1 --&gt;|"否"| Q2{"知道数据在哪张表？"}
+    KS --&gt; Q2
+    Q2 --&gt;|"不知道"| FC["find_column 搜字段&lt;br/&gt;list_tables 搜表名"]
+    Q2 --&gt;|"知道"| DT
+    FC --&gt; DT["describe_table 看字段与样本"]
+    DT --&gt; SQL["run_sql 取数（只读）"]
+    SQL --&gt; J{"数据够答了吗？"}
+    J --&gt;|"不够 / 口径存疑"| Q2
+    J --&gt;|"够了"| AN["作答：先结论，再 ①②③&lt;br/&gt;每个数字带单位 + 口径"]
+    J --&gt;|"查不到"| NF["如实说查不到&lt;br/&gt;并说明已经查了什么 → 落缺口清单"]
+
+    subgraph 服务层硬约束
+      NUD["零工具就作答 → 提醒一次"] --&gt; BLK["仍不调 → 拦下"]
+      STEP["剩 3 步 → 提醒尽快收手"]
+    end</pre>
+<h2>图 3</h2><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant U as 页面（用户）
+    participant S as server.py
+    participant ASR as Fun-ASR（百炼）
+    participant CMP as 问题补全应用（百炼）
+    participant A as agent 循环
+    participant L as qwen 模型
+    participant D as 知识库 / 业务库
+    participant G as 缺口清单
+
+    Note over U,ASR: 可选：语音输入（约 1.1 秒走完五阶段）
+    U-&gt;&gt;S: POST /api/asr（录音二进制）
+    S-&gt;&gt;ASR: ① 取上传凭证 → ② 上传 OSS → ③ 提交任务
+    ASR--&gt;&gt;S: task_id
+    loop ④ 轮询
+      S-&gt;&gt;ASR: GET /tasks/{task_id}
+      ASR--&gt;&gt;S: RUNNING → SUCCEEDED
+    end
+    S-&gt;&gt;ASR: ⑤ 取 transcription_url
+    ASR--&gt;&gt;S: 转写文本
+    S--&gt;&gt;U: 文本 + 五阶段原始请求/返回
+
+    Note over U,G: 问答
+    U-&gt;&gt;S: POST /api/ask {question}
+    S-&gt;&gt;S: 补全缓存查一下？
+    alt 缓存未命中
+      S-&gt;&gt;CMP: input.prompt = 原始问法
+      CMP--&gt;&gt;S: 标准问题（7–19 秒）
+    else 命中
+      S-&gt;&gt;S: 直接用缓存（0 ms）
+    end
+    S-&gt;&gt;A: agent.ask(标准问题)
+    A-&gt;&gt;L: messages + 5 个工具定义
+    L--&gt;&gt;A: tool_calls: kb_search → run_sql
+    A-&gt;&gt;D: 检索口径 / 只读取数
+    D--&gt;&gt;A: 切片 / 数据
+    A-&gt;&gt;L: 带结果再问
+    L--&gt;&gt;A: 无 tool_calls（已用过工具）→ 答案
+    A--&gt;&gt;S: { answer, trace[], timings, counts }
+    S-&gt;&gt;G: 答不了？（查不到 / 未核实）→ 落一条
+    S--&gt;&gt;U: JSON（左栏回答 / 右栏全过程）</pre>
+<h2>图 4</h2><pre class="mermaid">flowchart TD
+    F["本地音频（浏览器录制 / 上传文件）"] --&gt; S1["① 取上传凭证&lt;br/&gt;GET /api/v1/uploads?action=getPolicy&amp;model=fun-asr"]
+    S1 --&gt; S2["② 上传到 OSS 临时存储&lt;br/&gt;POST {upload_host}（multipart，48 小时有效）"]
+    S2 --&gt; URL["得到 oss://dashscope-instant/…/文件.mp3"]
+    URL --&gt; S3["③ 提交转写任务&lt;br/&gt;POST /api/v1/services/audio/asr/transcription&lt;br/&gt;请求头 X-DashScope-OssResourceResolve: enable"]
+    S3 --&gt; TID["task_id"]
+    TID --&gt; S4["④ 轮询 GET /api/v1/tasks/{task_id}&lt;br/&gt;PENDING → RUNNING → SUCCEEDED"]
+    S4 --&gt; S5["⑤ GET transcription_url&lt;br/&gt;拿到 transcripts[].text"]
+    S5 --&gt; TXT2["识别文本"]</pre>
+<script>mermaid.initialize({startOnLoad:true,theme:'default',flowchart:{useMaxWidth:true},sequence:{useMaxWidth:true}});</script>
+</body></html>

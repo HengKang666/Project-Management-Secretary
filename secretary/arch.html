@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+ *{box-sizing:border-box;margin:0;padding:0}
+ body{font-family:"Microsoft YaHei",system-ui,sans-serif;background:#eef1f5;padding:20px;color:#1d2430}
+ html,body{height:auto}
+ h1{font-size:20px;margin-bottom:4px}
+ .sub{font-size:12px;color:#6b7684;margin-bottom:16px}
+ .wrap{width:1640px}
+ .row{display:flex;gap:16px;align-items:stretch;margin-bottom:0}
+ .col{flex:1;display:flex;flex-direction:column;gap:12px}
+ .box{background:#fff;border:1px solid #d5dbe3;border-radius:10px;padding:12px 14px;box-shadow:0 1px 2px rgba(20,30,50,.06)}
+ .box h3{font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+ .tag{font-size:11px;font-weight:400;color:#fff;background:#8a95a3;border-radius:4px;padding:1px 6px}
+ .blue{border-top:4px solid #1a6fd4}.blue h3{color:#12539f}
+ .green{border-top:4px solid #0f9d58}.green h3{color:#0b7a44}
+ .purple{border-top:4px solid #7a5af8}.purple h3{color:#5b3fd0}
+ .orange{border-top:4px solid #e8842c}.orange h3{color:#b9651a}
+ .gray{border-top:4px solid #7d8894}
+ .li{font-size:12.5px;line-height:1.75;color:#33404f}
+ .li b{color:#111}
+ .arrow{text-align:center;color:#9aa6b4;font-size:20px;line-height:1;margin:6px 0}
+ .tools{display:flex;gap:12px}
+ .tool{flex:1;background:#fff;border:1px solid #d5dbe3;border-top:4px solid #7a5af8;border-radius:10px;padding:10px 12px}
+ .tool .n{font-size:13.5px;font-weight:700;color:#5b3fd0;margin-bottom:6px}
+ .tool .d{font-size:11.5px;line-height:1.6;color:#4a5666}
+ .src{flex:1;background:#fff;border:1px solid #d5dbe3;border-left:4px solid #0f9d58;border-radius:10px;padding:10px 12px}
+ .src .n{font-size:13px;font-weight:700;color:#0b7a44;margin-bottom:6px}
+ .src .d{font-size:11.5px;line-height:1.65;color:#4a5666}
+ .loop{background:#f7f9ff;border:2px dashed #1a6fd4;border-radius:12px;padding:14px}
+ .step{display:flex;gap:10px;align-items:stretch}
+ .step .n{width:26px;height:26px;flex:none;border-radius:50%;background:#1a6fd4;color:#fff;font-size:13px;
+          display:flex;align-items:center;justify-content:center;font-weight:700}
+ .split{display:flex;gap:12px;margin-top:10px}
+ .split .s{flex:1;background:#fff;border:1px solid #d5dbe3;border-radius:8px;padding:9px 11px;font-size:12px;line-height:1.7}
+ .ok{border-left:4px solid #0f9d58}.warn{border-left:4px solid #e8842c}
+ .foot{display:flex;gap:16px;margin-top:14px}
+ .kpi{flex:1;background:#fff;border:1px solid #d5dbe3;border-radius:10px;padding:10px 12px}
+ .kpi .t{font-size:12px;color:#6b7684}
+ .kpi .v{font-size:16px;font-weight:700;color:#12539f;margin-top:3px}
+</style></head><body><div class="wrap">
+<h1>项目管理秘书 · 完整架构图</h1>
+<div class="sub">模型自主决策的问答服务 ｜ 代码里没有任何业务判断 ｜ 问答轨迹可审计 ｜ 2026-09-14</div>
+
+<div class="box blue">
+  <h3>① 入口 <span class="tag">浏览器 / 调用方</span></h3>
+  <div class="row">
+    <div class="col"><div class="box gray"><h3>左栏 · 回答</h3><div class="li">结论 + 分点数字 + 单位 + 口径<br>未核实答案会被拦下并标黄</div></div></div>
+    <div class="col"><div class="box gray"><h3>右栏 · 工具调用轨迹</h3><div class="li">每一步：工具名、参数、返回、耗时<br>可逐条展开，不可伪造</div></div></div>
+    <div class="col"><div class="box gray"><h3>调用方式</h3><div class="li">POST /api/ask {question, model}<br>GET /health ｜ 页面支持 ?q=问题 直接跑</div></div></div>
+  </div>
+</div>
+
+<div class="arrow">▼</div>
+
+<div class="box green">
+  <h3>② HTTP 服务 <span class="tag">server.py · 标准库，零额外依赖</span></h3>
+  <div class="li">127.0.0.1:8200 ｜ 线程池处理请求 ｜ 只做转发与错误兜底，不含业务逻辑</div>
+</div>
+
+<div class="arrow">▼</div>
+
+<div class="loop">
+  <h3 style="font-size:15px;color:#12539f;margin-bottom:10px">③ 决策内核 · agent.py —— 模型自主循环（步数不限）</h3>
+  <div class="step">
+    <div class="n">1</div>
+    <div class="li"><b>组装上下文</b>：messages = [ 系统提示（5 条底线）, 用户问题 ] —— 不注入任何业务规则、不放表清单、不做问题分类</div>
+  </div>
+  <div class="arrow" style="margin:4px 0">▼</div>
+  <div class="step">
+    <div class="n">2</div>
+    <div class="li"><b>调 qwen3.8-max</b>，请求里带上 5 个工具的定义（enable_thinking=false / temperature=0）</div>
+  </div>
+  <div class="arrow" style="margin:4px 0">▼</div>
+  <div class="step">
+    <div class="n">3</div>
+    <div class="li"><b>模型返回</b> → 分支判断（唯一的分支，且不含业务含义）</div>
+  </div>
+  <div class="split">
+    <div class="s ok"><b>有 tool_calls</b><br>逐个执行 → 结果回灌为 tool 消息 → 回到第 2 步；<br>剩 3 步开始追加"请尽快收手"提醒</div>
+    <div class="s ok"><b>没有 tool_calls · 且用过工具</b><br>这段 content 就是最终回答 → 结束</div>
+    <div class="s warn"><b>没有 tool_calls · 且一个工具都没用</b><br>先提醒一次"请先核实"；<br>仍不调用 → <b>拦下</b>，返回「未核实，不予作答」</div>
+  </div>
+  <div class="arrow" style="margin:6px 0">▼</div>
+  <div class="step">
+    <div class="n">4</div>
+    <div class="li"><b>产出</b>：{ answer, trace[], 查库次数, 知识库次数, unverified, elapsed_ms }</div>
+  </div>
+</div>
+
+<div class="arrow">▼</div>
+
+<div class="box purple">
+  <h3>④ 模型可以调用的 5 个工具 <span class="tag">工具清单写死在代码里，但"什么时候用哪个"由模型决定</span></h3>
+  <div class="tools">
+    <div class="tool"><div class="n">kb_search(query, top_k)</div><div class="d">检索百炼知识库，返回按相关度排序的<b>文档切片</b>（口径 / 业务背景）。只要切片，不要它生成的答案。</div></div>
+    <div class="tool"><div class="n">find_column(keyword)</div><div class="d">按字段名或<b>中文注释</b>全局搜字段，返回「表名+字段+类型+注释」。解决"这个数据在哪张表"。</div></div>
+    <div class="tool"><div class="n">list_tables(keyword?)</div><div class="d">列出表的名称、中文注释、估算行数、更新时间，并带<b>用途标记</b>（备份/暂存表标"勿当数据源"）。</div></div>
+    <div class="tool"><div class="n">describe_table(table)</div><div class="d">某张表的完整字段（名/类型/是否可空/注释）+ 前 2 行样本。</div></div>
+    <div class="tool"><div class="n">run_sql(sql)</div><div class="d">只读执行 SELECT —— <b>唯一的数据来源</b>，回答里每个数字都要能追到某次调用。</div></div>
+  </div>
+</div>
+
+<div class="arrow">▼</div>
+
+<div class="row">
+  <div class="src"><div class="n">百炼知识检索服务（口径与背景）</div>
+    <div class="d">专用检索 agent，绑定 3 份文档 + 业务知识库：<br>
+    · 电力业务口径文档（权威，原样入库）<br>
+    · 口径库（速查手册：10 条铁律 / 状态码 / 时间窗口 / 表映射）<br>
+    · 数据地图（133 张表按主题分组 + 上一版 29 条白名单查询映射）<br>
+    · ai大脑业务知识库（公司业务背景）<br>
+    返回切片，实测相关度 0.95+</div></div>
+  <div class="src" style="border-left-color:#1a6fd4"><div class="n" style="color:#12539f">业务库 dlj_data（MySQL，133 张表）</div>
+    <div class="d">表元数据通过 information_schema 获取（表名 / 字段 / 注释 / 样本）；<br>
+    真实数据只能经 run_sql 读取；<br>
+    表名有语义前缀：t_power_push_* 中台推送结果 · t_power_* 业务表 · t_cost_* 定额价格 · stg_*/_bak_/_copy 勿用</div></div>
+  <div class="src" style="border-left-color:#e8842c"><div class="n" style="color:#b9651a">只读安全闸（纯保险，不含业务判断）</div>
+    <div class="d">只允许 SELECT / 禁分号与注释 / 强制 LIMIT 200 行 / 单条 25 秒超时 /<br>
+    每线程一条连接 + 用前 ping 探活 + 断了自动重连 + 连接类错误重试一次</div></div>
+</div>
+
+<div class="foot">
+  <div class="kpi"><div class="t">代码里的业务规则</div><div class="v">0 条</div></div>
+  <div class="kpi"><div class="t">模型可见工具</div><div class="v">5 个</div></div>
+  <div class="kpi"><div class="t">知识库文档</div><div class="v">3 + 1 份</div></div>
+  <div class="kpi"><div class="t">业务表</div><div class="v">133 张</div></div>
+  <div class="kpi"><div class="t">单题耗时（实测）</div><div class="v">5 – 27 秒</div></div>
+  <div class="kpi"><div class="t">不查就答</div><div class="v">被拦下</div></div>
+</div>
+</div></body></html>

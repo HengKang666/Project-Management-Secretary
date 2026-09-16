@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>项目管理秘书 · 模型自主问答演示</title>
+<style>
+ body{font-family:system-ui,Segoe UI,Microsoft YaHei,sans-serif;margin:0;background:#f7f8fa;color:#20242b}
+ header{padding:14px 20px;background:#fff;border-bottom:1px solid #e6e8eb;display:flex;align-items:center;gap:14px}
+ h1{font-size:16px;margin:0;font-weight:600}
+ select{padding:5px 8px;border:1px solid #cfd4da;border-radius:5px;font-size:13px}
+ .wrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;padding:16px 20px;align-items:start}
+ .bar{display:flex;gap:8px}
+ input{flex:1;padding:10px;font-size:15px;border:1px solid #cfd4da;border-radius:6px;background:#fff}
+ button{padding:10px 18px;font-size:15px;border:0;border-radius:6px;background:#1a6fd4;color:#fff;cursor:pointer}
+ button:disabled{background:#9cbfe8}
+ .card{background:#fff;border:1px solid #e6e8eb;border-radius:8px;padding:14px}
+ .lbl{font-size:12px;color:#7b838d;margin:0 0 8px}
+ #answer{white-space:pre-wrap;line-height:1.65;min-height:80px;font-size:15px}
+ #completed{font-size:12.5px;color:#5b3fd0;background:#f4f1ff;border-left:3px solid #7a5af8;border-radius:4px;padding:7px 10px;margin-bottom:10px;line-height:1.6;white-space:pre-wrap}
+#meta{font-size:12px;color:#7b838d;margin-top:12px;border-top:1px solid #f0f1f3;padding-top:10px}
+ .warn{display:inline-block;background:#fff3cd;color:#8a6100;border-radius:4px;padding:2px 8px;font-size:12px;margin-left:8px}
+ .step{border:1px solid #e6e8eb;border-radius:6px;margin:0 0 8px;overflow:hidden}
+ .step summary{cursor:pointer;padding:8px 10px;font-size:13px;background:#fafbfc;list-style:none}
+ .step summary::-webkit-details-marker{display:none}
+ .tag{display:inline-block;padding:1px 7px;border-radius:3px;font-size:12px;margin-right:8px;color:#fff}
+ .t-kb{background:#7a5af8}.t-db{background:#1a6fd4}.t-meta{background:#8a94a0}.t-ans{background:#0f9d58}
+ .ms{float:right;color:#9aa2ab;font-size:12px}
+ pre{margin:0;padding:10px;font-size:12px;overflow:auto;max-height:300px;background:#fff;border-top:1px solid #eef0f2;white-space:pre-wrap;word-break:break-all}
+ .hint{font-size:12px;color:#9aa2ab;margin-top:8px}
+ #report{line-height:1.75;font-size:14.5px}
+ #report h3{font-size:15px;margin:16px 0 8px;padding-left:8px;border-left:3px solid #1a6fd4}
+ #report h4{font-size:14px;margin:12px 0 6px}
+ #report ul,#report ol{margin:6px 0 10px;padding-left:22px}
+ #report p{margin:6px 0}
+ #report b{color:#123a6b}
+ .ok{color:#0f9d58;font-weight:600}.bad{color:#c0392b;font-weight:600}
+ .warnbox{background:#fff3cd;color:#8a6100;border-radius:6px;padding:8px 10px;font-size:12.5px;line-height:1.6;margin-bottom:8px}
+ .checks{margin-top:12px;border-top:1px solid #eef0f2;padding-top:10px;font-size:12.5px;line-height:1.9}
+ .checks .lbl{margin-bottom:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>项目管理秘书 · 模型自主问答</h1>
+  <select id="model" title="选择模型"></select>
+  <span id="modelnote" style="font-size:12px;color:#7b838d"></span>
+</header>
+<div class="wrap">
+  <div>
+    <div class="card" style="margin-bottom:12px">
+      <p class="lbl">年度缺陷治理计划 —— 接到请求自动跑完 6 步（预算分配 → 16 项指标分析 → 治理目标 → 项目计划 → 预计成效 → 计划上报）</p>
+      <div class="bar">
+        <select id="ryear" title="数据年度"></select>
+        <select id="rscope" title="统计范围" style="flex:1"></select>
+        <button id="rgo" onclick="runReport()">生成计划报告</button>
+      </div>
+    </div>
+    <div class="bar">
+      <input id="q" placeholder="输入上游信息补全后的问题（时间、地点已明确），例如：截至2026年9月，全市的预算总额是多少？" />
+      <button id="go" onclick="ask()">提问</button>
+    </div>
+    <div style="margin-top:10px">
+      <textarea id="profile" rows="2" placeholder="用户画像（可选，辅助问题补全）：例如 我是市公司运检部专责，只看全市和随县，重点看线损与工单"
+        style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #e3e6ea;border-radius:8px;font-family:inherit;font-size:13px;resize:vertical"></textarea>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <p class="lbl">回答</p>
+      <div id="completed"></div>
+      <div id="answer"></div>
+      <div id="report"></div>
+      <div id="meta"></div>
+    </div>
+    <div class="hint">时间与地点由上游信息补全提供；问题补全、查口径、取数、作答都由模型自己排顺序。本页不预设任何业务规则。</div>
+  </div>
+  <div class="card">
+    <p class="lbl">处理过程（工具调用轨迹）</p>
+    <div id="trace"></div>
+  </div>
+</div>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+var MODELNOTE={};
+function loadModels(){
+  fetch('/api/models').then(function(r){return r.json();}).then(function(d){
+    var sel=document.getElementById('model'), groups={}, order=[];
+    (d.models||[]).forEach(function(m){
+      if(!groups[m.group]){groups[m.group]=[];order.push(m.group);}
+      groups[m.group].push(m); MODELNOTE[m.id]=m.note||'';
+    });
+    order.forEach(function(g){
+      var og=document.createElement('optgroup'); og.label=g;
+      groups[g].forEach(function(m){
+        var op=document.createElement('option'); op.value=m.id;
+        op.textContent=m.label+'  ('+m.id+')';
+        og.appendChild(op);
+      });
+      sel.appendChild(og);
+    });
+    sel.value=d.default||'qwen3.8-max';
+    document.getElementById('modelnote').textContent=MODELNOTE[sel.value]||'';
+  }).catch(function(){});
+}
+document.getElementById('model').addEventListener('change',function(){
+  document.getElementById('modelnote').textContent=MODELNOTE[this.value]||'';
+});
+loadModels();
+function tagCls(t){return t==='kb_search'?'t-kb':(t==='run_sql'?'t-db':(t==='answer'?'t-ans':'t-meta'));}
+function ask(){
+  var q=document.getElementById('q').value.trim();
+  if(!q)return;
+  var b=document.getElementById('go');b.disabled=true;b.textContent='处理中…';
+  document.getElementById('answer').textContent='';
+  document.getElementById('report').innerHTML='';
+  document.getElementById('completed').textContent='';
+  document.getElementById('trace').innerHTML='';
+  document.getElementById('meta').textContent='';
+  var model=document.getElementById('model').value;
+  var profile=document.getElementById('profile').value.trim();
+  try{localStorage.setItem('secretary_profile',profile);}catch(e){}
+  fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({question:q,model:model,profile:profile})})
+   .then(function(r){return r.json();})
+   .then(function(d){
+     document.getElementById('completed').textContent=(d.user_profile?('用户画像：'+d.user_profile+String.fromCharCode(10)):'')+(d.completed_question?('补全参考（仅参考，以问题为准）：'+d.completed_question):'');
+      document.getElementById('answer').textContent=d.answer||'（空）';
+     var w=d.no_db_query?'<span class="warn">本次未查询数据库</span>':'';
+     var tm=d.timings||{};
+     var gap=d.recorded_as_gap?'<span class="warn" style="background:#ffe8e6;color:#a12a20">已记入缺口清单</span>':'';
+     document.getElementById('meta').innerHTML='模型 '+esc(d.model||model)+' · 工具调用 '+d.steps+' 次（查库 '
+        +d.db_query_count+' 次 / 知识库 '+d.kb_query_count+' 次）· 总耗时 '+(d.elapsed_ms/1000).toFixed(1)+' 秒'
+         +'（补全 '+((tm.completion_ms||0)/1000).toFixed(1)+'s + 循环 '+((tm.loop_ms||0)/1000).toFixed(1)+'s）'+w+gap;
+     var h='';
+     (d.trace||[]).forEach(function(s){
+       var cls=tagCls(s.tool||s.kind);
+       var name=s.kind==='answer'?'最终回答':s.tool;
+       var body=JSON.stringify(s.args||{},null,1)+'\n----\n'+JSON.stringify(s.result||s.content||'',null,1);
+       h+='<details class="step" '+(s.kind==='answer'?'open':'')+'><summary>'
+          +'<span class="tag '+cls+'">'+esc(name)+'</span>'
+          +(s.round?('<span class="ms">第'+s.round+'轮</span>'):'')+'<span class="ms">'+(s.ms||s.model_ms||0)+' ms</span></summary><pre>'+esc(body)+'</pre></details>';
+     });
+     document.getElementById('trace').innerHTML=h;
+   })
+   .catch(function(e){document.getElementById('answer').textContent='请求失败：'+e;})
+   .then(function(){b.disabled=false;b.textContent='提问';});
+}
+function loadReportMeta(){
+  fetch('/api/report/meta').then(function(r){return r.json();}).then(function(d){
+    var y=document.getElementById('ryear'); y.innerHTML='';
+    var base=parseInt(d.year||'2026',10);
+    for(var i=0;i<3;i++){var o=document.createElement('option');o.value=String(base-i);o.textContent=(base-i)+' 年度数据';y.appendChild(o);}
+    var s=document.getElementById('rscope'); s.innerHTML='<option value="">全市</option>';
+    (d.scopes||[]).forEach(function(n){var o=document.createElement('option');o.value=n;o.textContent=n;s.appendChild(o);});
+  }).catch(function(){});
+}
+loadReportMeta();
+
+function mdInline(s){
+  var parts=esc(s).split('**'), out='';
+  for(var i=0;i<parts.length;i++){ out += (i%2 ? '<b>'+parts[i]+'</b>' : parts[i]); }
+  return out;
+}
+function mdToHtml(t){
+  var out=[], inUl=false, inOl=false;
+  function closeAll(){ if(inUl){out.push('</ul>');inUl=false;} if(inOl){out.push('</ol>');inOl=false;} }
+  String(t||'').split(String.fromCharCode(10)).forEach(function(raw){
+    var s=raw.trim(), i, ok=false;
+    if(s.indexOf('### ')===0){closeAll();out.push('<h4>'+mdInline(s.slice(4))+'</h4>');return;}
+    if(s.indexOf('## ')===0){closeAll();out.push('<h3>'+mdInline(s.slice(3))+'</h3>');return;}
+    if(s.indexOf('# ')===0){closeAll();out.push('<h3>'+mdInline(s.slice(2))+'</h3>');return;}
+    if(s.indexOf('- ')===0||s.indexOf('* ')===0){ if(!inUl){closeAll();out.push('<ul>');inUl=true;} out.push('<li>'+mdInline(s.slice(2))+'</li>');return;}
+    if(s.length>3 && s.charCodeAt(0)>=48 && s.charCodeAt(0)<=57){
+      for(i=1;i<4&&i<s.length;i++){ var ch=s.charAt(i); if(ch==='.'||ch===')'){ok=true;break;} if(s.charCodeAt(i)<48||s.charCodeAt(i)>57){break;} }
+      if(ok){ if(!inOl){closeAll();out.push('<ol>');inOl=true;} out.push('<li>'+mdInline(s.slice(i+1))+'</li>');return;}
+    }
+    if(!s){closeAll();return;}
+    closeAll(); out.push('<p>'+mdInline(s)+'</p>');
+  });
+  closeAll();
+  return out.join('');
+}
+function renderReportTrace(trace, checks, warnings, d){
+  var NL=String.fromCharCode(10), h='';
+  if(warnings&&warnings.length){h+='<div class="warnbox">'+warnings.map(esc).join('<br>')+'</div>';}
+  (trace||[]).forEach(function(s){
+    var body;
+    if(s.kind==='sql'){
+      body=(s.queries||[]).map(function(q){
+        return '【'+q.label+'】 '+q.row_count+' 行 / '+q.ms+' ms'+NL+q.sql+(q.error?(NL+'错误：'+q.error):'')+NL+JSON.stringify(q.rows,null,1);
+      }).join(NL+NL);
+    }else{
+      body=JSON.stringify(s.output,null,1)+(s.error?(NL+'错误：'+s.error):'');
+    }
+    h+='<details class="step"><summary><span class="tag '+(s.kind==='sql'?'t-db':'t-ans')+'">第'+s.seq+'步 '+(s.kind==='sql'?'取数':'模型')+'</span>'+esc(s.title)+'<span class="ms">'+(s.ms||0)+' ms</span></summary><pre>'+esc(body)+'</pre></details>';
+  });
+  if(checks&&checks.length){
+    h+='<div class="checks"><p class="lbl">对账</p>'+checks.map(function(c){
+      var extra={}; for(var k in c){ if(k!=='name'&&k!=='pass'){extra[k]=c[k];} }
+      return '<div>'+(c.pass?'<span class="ok">通过</span>':'<span class="bad">不通过</span>')+' '+esc(c.name)+' <span style="color:#9aa2ab">'+esc(JSON.stringify(extra))+'</span></div>';
+    }).join('')+'</div>';
+  }
+  document.getElementById('trace').innerHTML=h;
+  var tm=d.timings||{};
+  document.getElementById('meta').innerHTML='范围 '+esc(d.scope||'')+' ｜ 年度 '+esc(d.year||'')+' ｜ 取数 '+((tm.collect_ms||0)/1000).toFixed(1)+'s + 判断 '+((tm.model1_ms||0)/1000).toFixed(1)+'s + 成文 '+((tm.model2_ms||0)/1000).toFixed(1)+'s ｜ 总耗时 '+((d.elapsed_ms||0)/1000).toFixed(1)+' 秒';
+}
+function runReport(){
+  var b=document.getElementById('rgo'); b.disabled=true; b.textContent='生成中…约 1 分钟';
+  document.getElementById('answer').textContent='';
+  document.getElementById('completed').textContent='';
+  document.getElementById('trace').innerHTML='';
+  document.getElementById('meta').innerHTML='';
+  document.getElementById('report').innerHTML='<p class="hint">正在按固定流程取数（6 步）并生成报告，约 1 分钟…</p>';
+  fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({year:document.getElementById('ryear').value,scope:document.getElementById('rscope').value,model:document.getElementById('model').value})})
+   .then(function(r){return r.json();})
+   .then(function(d){
+     document.getElementById('report').innerHTML=mdToHtml(d.report||'（模型未返回内容）');
+     renderReportTrace(d.trace||[],d.checks||[],d.warnings||[],d);
+   })
+   .catch(function(e){document.getElementById('report').textContent='请求失败：'+e;})
+   .then(function(){b.disabled=false;b.textContent='生成计划报告';});
+}
+try{var _pf=localStorage.getItem('secretary_profile');if(_pf)document.getElementById('profile').value=_pf;}catch(e){}
+document.getElementById('q').addEventListener('keydown',function(e){if(e.key==='Enter')ask();});
+var m=location.search.match(/[?&]q=([^&]*)/);
+if(m){document.getElementById('q').value=decodeURIComponent(m[1]);ask();}
+</script>
+</body>
+</html>

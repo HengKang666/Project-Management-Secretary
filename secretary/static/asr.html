@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>语音 → 问答 · 全链路可见</title>
+<style>
+ body{font-family:system-ui,"Microsoft YaHei",sans-serif;margin:0;background:#f7f8fa;color:#20242b}
+ header{padding:14px 20px;background:#fff;border-bottom:1px solid #e6e8eb;display:flex;align-items:center;gap:14px}
+ h1{font-size:16px;margin:0;font-weight:600}
+ a{color:#1a6fd4;font-size:13px;text-decoration:none}
+ .wrap{padding:16px 20px;max-width:1500px}
+ .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+ button{padding:9px 16px;font-size:14px;border:0;border-radius:6px;background:#1a6fd4;color:#fff;cursor:pointer}
+ button.gray{background:#6b7684}
+ button:disabled{background:#9cbfe8;cursor:default}
+ #status{font-size:13px;color:#6b7684}
+ .card{background:#fff;border:1px solid #e6e8eb;border-radius:8px;padding:14px;margin-bottom:14px}
+ .lbl{font-size:12px;color:#7b838d;margin:0 0 8px}
+ .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:16px;align-items:start}
+ .stage{border:1px solid #e6e8eb;border-radius:6px;margin-bottom:8px;overflow:hidden;background:#fff}
+ .stage summary{cursor:pointer;padding:8px 10px;font-size:13px;background:#fafbfc;list-style:none}
+ .stage summary::-webkit-details-marker{display:none}
+ .tag{display:inline-block;padding:1px 7px;border-radius:3px;font-size:12px;margin-right:8px;color:#fff;background:#7a5af8}
+ .ok{background:#0f9d58}.bad{background:#d93025}.ms{float:right;color:#9aa2ab;font-size:12px}
+ pre{margin:0;padding:10px;font-size:12px;overflow:auto;max-height:300px;background:#fff;border-top:1px solid #eef0f2;white-space:pre-wrap;word-break:break-all}
+ #text{font-size:15px;line-height:1.7;min-height:26px;white-space:pre-wrap}
+ .warn{background:#fff3cd;color:#8a6100;border-radius:4px;padding:2px 8px;font-size:12px}
+</style></head><body>
+<header>
+  <h1>语音 → 转写 → 补全 → 查库 → 回答（每阶段可见）</h1>
+  <a href="/">← 回到问答页</a>
+</header>
+<div class="wrap">
+  <div class="bar">
+    <button id="rec" onclick="toggleRec()">开始录音</button>
+    <input type="file" id="file" accept="audio/*" onchange="uploadFile()" />
+    <button class="gray" onclick="runSample()">用示例音频试一次</button>
+    <button class="gray" onclick="runAsk()" id="askBtn" disabled>用这句话去问答</button>
+    <span id="status"></span>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card"><p class="lbl">① 语音识别结果（Fun-ASR）</p><div id="text"></div>
+        <div id="metainfo" style="font-size:12px;color:#7b838d;margin-top:8px"></div>
+      </div>
+      <div class="card"><p class="lbl">② 问答结果</p><div id="answer" style="white-space:pre-wrap;line-height:1.7;min-height:26px"></div>
+        <div id="askmeta" style="font-size:12px;color:#7b838d;margin-top:8px"></div>
+      </div>
+    </div>
+    <div class="card">
+      <p class="lbl">调用阶段（展开看每一步的原始请求 / 返回）</p>
+      <div id="stages"></div>
+      <p class="lbl" style="margin-top:14px">问答阶段的工具轨迹</p>
+      <div id="trace2"></div>
+    </div>
+  </div>
+</div>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function renderStages(list, box){
+  var el=document.getElementById(box); el.innerHTML='';
+  (list||[]).forEach(function(s,i){
+    var ok=(s.status===200||s.status===201||s.status===204);
+    var body=JSON.stringify(s.request||{},null,1)+'\n---- 返回 ----\n'+JSON.stringify(s.response||'',null,1);
+    el.innerHTML += '<details class="stage"><summary><span class="tag '+(ok?'ok':'bad')+'">'
+      + esc(s.name||('阶段'+(i+1)))+'</span><span class="ms">'+(s.method||'')+' '+(s.status||'')+' · '+(s.ms||0)+' ms</span></summary>'
+      + '<pre>'+esc(s.url||'')+'\n\n'+esc(body)+'</pre></details>';
+  });
+}
+var rec=null, chunks=[];
+function toggleRec(){
+  var b=document.getElementById('rec');
+  if(rec && rec.state==='recording'){ rec.stop(); return; }
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+    rec=new MediaRecorder(stream); chunks=[];
+    rec.ondataavailable=function(e){ if(e.data.size) chunks.push(e.data); };
+    rec.onstop=function(){
+      stream.getTracks().forEach(function(t){t.stop();});
+      var blob=new Blob(chunks,{type:rec.mimeType||'audio/webm'});
+      document.getElementById('status').textContent='录音完成，正在识别…';
+      send(blob,'rec.webm');
+      b.textContent='开始录音';
+    };
+    rec.start(); b.textContent='停止录音';
+    document.getElementById('status').textContent='录音中…';
+  }).catch(function(e){ document.getElementById('status').textContent='无法访问麦克风：'+e; });
+}
+function runSample(){
+  document.getElementById('status').textContent='取示例音频…';
+  fetch('/api/asr/sample').then(function(r){return r.blob();}).then(function(b){ send(b,'sample_asr.mp3'); })
+   .catch(function(e){ document.getElementById('status').textContent='取示例失败：'+e; });
+}
+function uploadFile(){
+  var f=document.getElementById('file').files[0]; if(!f) return;
+  document.getElementById('status').textContent='上传识别中…';
+  send(f, f.name);
+}
+function send(blob,name){
+  document.getElementById('text').textContent=''; document.getElementById('stages').innerHTML='';
+  document.getElementById('metainfo').textContent='';
+  var t0=Date.now();
+  fetch('/api/asr',{method:'POST',headers:{'X-Filename':name,'Content-Type':blob.type||'application/octet-stream'},body:blob})
+   .then(function(r){return r.json();})
+   .then(function(d){
+     document.getElementById('text').textContent = d.text || ('（识别失败）'+(d.error?('  '+d.error):''));
+     document.getElementById('metainfo').textContent='音频 '+((d.bytes||0)/1024).toFixed(0)+' KB · 全链路 '+((Date.now()-t0)/1000).toFixed(1)+' 秒 · 落盘 '+(d.saved_to||'');
+     renderStages(d.stages,'stages');
+     document.getElementById('askBtn').disabled = !d.text;
+     window.__asrText = d.text||'';
+     document.getElementById('status').textContent='识别完成';
+   })
+   .catch(function(e){ document.getElementById('status').textContent='失败：'+e; });
+}
+function runAsk(){
+  var q=window.__asrText; if(!q) return;
+  var b=document.getElementById('askBtn'); b.disabled=true; b.textContent='问答中…';
+  document.getElementById('answer').textContent=''; document.getElementById('trace2').innerHTML='';
+  fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})})
+   .then(function(r){return r.json();})
+   .then(function(d){
+     document.getElementById('answer').textContent=d.answer||'';
+     document.getElementById('askmeta').textContent='模型 '+d.model+' · 工具 '+d.steps+' 次（查库 '+d.db_query_count+' / 知识库 '+d.kb_query_count+'）· '
+        +((d.elapsed_ms||0)/1000).toFixed(1)+' 秒'+(d.completed_question?('　补全后：'+d.completed_question.slice(0,40)+'…'):'');
+     var h='';
+     (d.trace||[]).forEach(function(s,i){
+       var nm = s.kind==='answer' ? '最终回答' : (s.tool||s.kind);
+       var body=JSON.stringify(s.args||{},null,1)+'\n---- 返回 ----\n'+JSON.stringify(s.result||s.content||'',null,1);
+       h+='<details class="stage"><summary><span class="tag">'+esc(nm)+'</span><span class="ms">'+(s.ms||s.model_ms||0)+' ms</span></summary><pre>'+esc(body)+'</pre></details>';
+     });
+     document.getElementById('trace2').innerHTML=h;
+   })
+   .catch(function(e){ document.getElementById('answer').textContent='失败：'+e; })
+   .then(function(){ b.disabled=false; b.textContent='用这句话去问答'; });
+}
+if(location.search.indexOf('run=sample')>=0){ setTimeout(runSample, 300); }
+</script></body></html>

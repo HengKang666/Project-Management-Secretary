@@ -1,0 +1,33 @@
+# ===== 公开仓库策略：只放代码与 README，业务知识与数据内容一律不入库 =====
+
+# 凭据与本机环境
+.env
+*.env
+.env.*
+.credentials.yaml
+
+# 一次性侦察脚本：含生产服务器地址与 root 口令
+_probe_*.py
+_probe_*.ps1
+
+# 业务知识 / 设计文档：只保留 README
+*.md
+!README.md
+
+# 数据内容与测试产物
+output/
+.dsh/
+secretary/metric_catalog.json
+*_body.json
+*_body_stream.json
+_fetch.py
+
+# Python
+__pycache__/
+*.pyc
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
