@@ -1,4 +1,6 @@
-# ===== 公开仓库策略：只放代码与 README，业务知识与数据内容一律不入库 =====
+# ===== 公开仓库策略 =====
+# 入库：代码 + README + docs/ + skills/ + .env.example
+# 不入库：凭据、业务知识库、数据与产物
 
 # 凭据与本机环境
 .env
@@ -7,21 +9,22 @@
 !.env.example
 .credentials.yaml
 
-# 一次性侦察脚本：含生产服务器地址与 root 口令
-_probe_*.py
-_probe_*.ps1
-
-# 业务知识 / 设计文档：只保留 README
+# 文档默认不收，只收 docs/ 与 skills/
 *.md
 !README.md
+!docs/**
+!skills/**
 
-# 数据内容与测试产物
+# 以下几类放在最后，优先级最高，即使在上面目录里也不收
+secretary/电力业务口径文档.md
+secretary/数据地图.md
+secretary/口径库.md
+secretary/metric_catalog.json
+docs/历史/构建说明.md
+
+# 数据与产物
 output/
 .dsh/
-secretary/metric_catalog.json
-*_body.json
-*_body_stream.json
-_fetch.py
 
 # Python
 __pycache__/
