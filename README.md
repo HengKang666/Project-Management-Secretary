@@ -37,7 +37,7 @@
 | SECRETARY_KB_IDS | r57xtq9ypm | 只检索这个知识库 |
 | SECRETARY_TABLES | 空 | 限定可查的表；空 = 用字典里登记的全部（19 张） |
 
-端点：问答 POST /api/ask {question}（返回 answer/trace/timings）｜ 页面 GET / ｜ 语音页 /asr ｜ 健康 /health ｜ 缺口 GET /api/gaps ｜ 计划报告 POST /api/report {year,scope} ｜ 报告参数 GET /api/report/meta。
+端点：问答 POST /api/ask {question}（返回 answer/trace/timings）｜ 页面 GET / ｜ 语音页 /asr ｜ 健康 /health ｜ 缺口 GET /api/gaps ｜ 计划报告 POST /api/report {notice} ｜ 模拟通知 POST /api/report/notice {station} ｜ 报告参数 GET /api/report/meta。
 
 ## 三、分工与流程（五段）
 
@@ -85,8 +85,9 @@
 | config.py | 读 .env、模型清单、端口/主机、知识库、表范围 |
 | static/index.html、static/asr.html | 问答页（左回答 / 右过程）、语音页 |
 | tools_app.py | 上游补全应用客户端，**已不在链路里**（保留备查） |
-| report.py | 年度缺陷治理计划：按剧本取数 → 2 次模型（判断 + 成文）→ 6 节报告 + 6 步轨迹 + 对账 |
-| reports/annual-defect-plan.json | 报告剧本：步骤 + SQL + 报告骨架 + 判定规则（业务知识进数据，不进代码） |
+| report.py | 年度缺陷治理计划分析：注入技能文档 + 通知数据，模型用现有工具自己查数、自己写报告（不写死 SQL）|
+| skills/数据表说明书.md | 每张表做什么、怎么设计、有哪些坑 —— 写别的分析 skill 也复用这份 |
+| skills/年度缺陷治理计划分析.md | 技能文档：分几节、每节查什么、怎么判断、不许做什么 |
 
 ## 七、待维护方定的口径（我们不改表，只列）
 

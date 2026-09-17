@@ -68,8 +68,9 @@ class H(BaseHTTPRequestHandler):
         elif path == '/api/report/meta':
             import report as reportmod
             y = reportmod.latest_year()
-            self._send(200, json.dumps({'year': y, 'scopes': reportmod.list_scopes(y),
-                                        'title': '年度缺陷治理计划'}, ensure_ascii=False), 'application/json')
+            self._send(200, json.dumps({'base_year': y, 'plan_year': str(int(y) + 1),
+                                        'stations': reportmod.list_stations(),
+                                        'title': '年度缺陷治理计划分析'}, ensure_ascii=False), 'application/json')
         elif path == '/api/models':
             self._send(200, json.dumps({'default': agent.config.MODEL,
                                         'models': agent.config.MODELS}, ensure_ascii=False), 'application/json')
@@ -80,6 +81,9 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split('?')[0]
         if path == '/api/asr':
             self._handle_asr()
+            return
+        if path == '/api/report/notice':
+            self._handle_notice()
             return
         if path == '/api/report':
             self._handle_report()
@@ -106,21 +110,38 @@ class H(BaseHTTPRequestHandler):
                  'no_db_query': True, 'db_query_count': 0, 'elapsed_ms': 0, 'steps': 0}
         self._send(200, json.dumps(r, ensure_ascii=False, default=str), 'application/json')
 
-    def _handle_report(self):
-        """年度缺陷治理计划：表单提交后跑固定流程（确定性取数 + 2 次模型），返回报告 + 6 步轨迹 + 对账。"""
+    def _read_json(self):
         n = int(self.headers.get('Content-Length') or 0)
         try:
-            data = json.loads(self.rfile.read(n).decode('utf-8') or '{}')
+            return json.loads(self.rfile.read(n).decode('utf-8') or '{}')
         except Exception:
-            data = {}
+            return {}
+
+    def _handle_notice(self):
+        """按供电所生成一份模拟的预算分配通知：上期用库里真实值，本期是模拟值，页面上可改。"""
+        data = self._read_json()
+        station = (data.get('station') or '').strip()
+        if not station:
+            self._send(200, json.dumps({'error': '缺少 station'}, ensure_ascii=False), 'application/json')
+            return
         try:
             import report as reportmod
-            r = reportmod.run_report(year=data.get('year') or None,
-                                     scope=(data.get('scope') or '').strip(),
-                                     model=data.get('model') or None)
-            r.pop('facts', None)   # 事实包只落盘留档，不回浏览器
+            r = reportmod.build_notice(station, base_year=data.get('base_year'),
+                                       plan_year=data.get('plan_year'))
         except Exception as e:
-            r = {'report': '', 'sections': [], 'trace': [], 'checks': [],
+            r = {'error': type(e).__name__ + ' ' + str(e)[:200]}
+        self._send(200, json.dumps(r, ensure_ascii=False, default=str), 'application/json')
+
+    def _handle_report(self):
+        """年度缺陷治理计划分析：把通知数据交给模型，它按技能文档自己查数、自己分析。"""
+        data = self._read_json()
+        try:
+            import report as reportmod
+            r = reportmod.run_report(notice=data.get('notice') or None,
+                                     station=(data.get('station') or '环潭供电所'),
+                                     model=data.get('model') or None)
+        except Exception as e:
+            r = {'report': '', 'trace': [], 'notice': {},
                  'warnings': ['服务异常：' + type(e).__name__ + ' ' + str(e)], 'elapsed_ms': 0}
         self._send(200, json.dumps(r, ensure_ascii=False, default=str), 'application/json')
 
