@@ -26,6 +26,10 @@ docs/历史/构建说明.md
 output/
 .dsh/
 
+# 纠错引擎的词典：catalog.csv / area_core.csv 含两万个真实台区名录，属业务数据
+# 缺了它纠错功能会自动降级（不报错），需要时单独获取并放回 data/ 目录
+secretary/libs/name_correction_lib/data/
+
 # Python
 __pycache__/
 *.pyc

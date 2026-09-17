@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """模型自主循环：只给工具与底线，不给流程。
 
-分工：上游只做「信息补全」（补统计时间与地点）；**问题补全由本服务负责** ——
-用知识库里的补全规则与术语词典，把口语问法补成标准问题，再查口径、取数、作答。
-全部在一个模型循环里由模型自己排顺序，代码不写业务流程，也不调用上游补全应用。
+分工：**信息补全由本服务自己做**（字面纠错与名称归一 → 时间与地点补全），
+问题补全走知识库的补全规则，再查口径、取数、作答。
+上游那个补全应用已不在链路里，时间与地点同样由本服务补（见 time_scope.py）。
+全部在一个模型循环里由模型自己排顺序，代码不写业务流程。
 """
 import concurrent.futures
 import json
@@ -14,7 +15,9 @@ import urllib.request
 
 import config
 import gaps
+import name_fix
 import semantic
+import time_scope
 import tools_db
 import tools_kb
 
@@ -99,7 +102,13 @@ COMPLETE_SYSTEM = (
     '   - 补全**不能改变问题的类型**：用户问的是某个具体指标或数量（如「台区线损率是多少」「低电压台区有多少个」），'
     '就不能套用「整体情况 / 台区情况说明」这类规则；反过来，用户问整体情况，也不要补成单个指标。\n'
     '   有对应规则 → 按它补全；没有对应规则 → **原样输出用户问题**，不要编造补全内容。\n'
-    '4. 时间与范围已由上游补全确定，直接采用，不要反问。'
+    '4. **时间与地点必须明确**（缺了就补，这是硬要求）：\n'
+    '   - 相对的时间说法**一律换成具体年月**：「上月」→「2026年8月」、「本月」→「2026年9月」、'
+    '「今年」→「2026年1-9月」、「去年」→「2025年」、「前年」→「2024年」。\n'
+    '   - 问题里**没说时间** → 按「今年至今」补；**没说地点** → 按「全市」补。\n'
+    '   - 具体的取值看下面给的【统计范围】—— 那是代码按今天日期算好的，'
+    '**直接采用，不要自己推算日期，也不要反问用户**。\n'
+    '   - 补完的问题里，时间与地点都要写全，让下游拿到的就是一条可以直接查的完整问题。'
 )
 
 
@@ -176,7 +185,9 @@ def _exec_calls(calls):
 
 
 def ask(question, model=None, max_steps=None, profile=None):
-    """question = 上游信息补全后的问题（时间与地点已明确）。
+    """question = 用户的原话（不需要上游预处理）。
+
+    本服务依次做：字面纠错与名称归一 → 时间与地点补全 → 问题补全 → 模型循环查数作答。
 
     profile = 用户画像（可选）：补全阶段不使用；与补全后的问题一起交给模型拆解任务。
     """
@@ -184,17 +195,59 @@ def ask(question, model=None, max_steps=None, profile=None):
     max_steps = max_steps or config.MAX_STEPS
     t_all = time.time()
     trace = []
+    raw_question = question
+    # ⓪ 字面纠错 + 名称归一（阶段①的「字面」部分，在问题补全之前）。
+    #    必须先做：字没改对，后面检索知识库、补全、写 SQL 全是白费。
+    t_fix = time.time()
+    fixed = name_fix.fix(question)
+    if fixed['used']:
+        question = fixed['text']
+        trace.append({'seq': len(trace) + 1, 'kind': 'namefix', 'tool': 'name_fix',
+                      'ms': fixed['ms'],
+                      'args': {'input': raw_question},
+                      'result': {'fixed': fixed['text'],
+                                 'word_fixes': fixed['word_fixes'],
+                                 'name_fixes': fixed['name_fixes'],
+                                 'names': fixed['names'],
+                                 'areas': fixed['areas'],
+                                 'unresolved': fixed.get('unresolved', []),
+                                 'hint': fixed['hint']}})
+    namefix_ms = int((time.time() - t_fix) * 1000)
+    # ⓪·5 时间与范围补全：相对时间词换成具体期间，缺的补默认值（时间=今年至今、地点=全市）。
+    #       这种换算是确定性的（「上月」是几月取决于今天），交给代码，不留给模型去猜日期。
+    t_scope = time.time()
+    scope = time_scope.describe(question, fixed)
+    if scope['question'] and scope['question'] != question:
+        question = scope['question']
+    trace.append({'seq': len(trace) + 1, 'kind': 'scope', 'tool': 'time_scope',
+                  'ms': int((time.time() - t_scope) * 1000),
+                  'result': {'matched': scope['time']['matched'],
+                             'time': scope['time']['time_text'],
+                             'period_type': scope['time']['period_type'],
+                             'period_key': scope['time']['period_key'],
+                             'time_is_default': scope['time']['is_default'],
+                             'place': scope['place'],
+                             'place_is_default': scope['place_default'],
+                             'hint': scope['time']['note']}})
     done = complete_question(question, model)
     completed = done['completed']
     # 判断（我们这边唯一的职责）：补全有没有产出与原文不同的内容 —— 相同就视为“没找到对应规则、不采用”
     used = bool(completed and completed.strip() and completed.strip() != question.strip())
-    trace.append({'seq': 1, 'kind': 'complete', 'tool': 'question_completion',
+    trace.append({'seq': len(trace) + 1, 'kind': 'complete', 'tool': 'question_completion',
                   'ms': done['ms'], 'args': {'input': question, 'rules': done['rules']},
                   'result': {'completed': completed, 'ok': done['ok'], 'used': used,
                              'reason': '按规则库补全' if used else '规则库没有对应问法，不采用补全'}})
     t_loop = time.time()
     # 问题为准；补全结果只作参考，由模型自己判断适不适用
     user_content = question
+    # 统计范围必须明确交给模型：六项指标是按「范围 + 期间」预计算的，
+    # 不给这一句，它就得自己猜该取 month 还是 yearToDate、该取哪个月。
+    user_content += ('\n\n【统计范围】（已按今天日期算好，直接采用，不要自行推算日期）\n'
+                     + scope['scope_text'])
+    if fixed['hint']:
+        # 名称被归到「地名层」时（库里没有这个精确名），必须告诉模型用前缀查，
+        # 否则它很可能拿合成名做等值匹配，一条都查不到还以为是空数据。
+        user_content += ('\n\n【名称归一说明】' + fixed['hint'])
     if used:
         user_content += ('\n\n【补全参考】按知识库的补全规则库，这个问法通常应补成下面这样。'
                          '它只是参考：如果与上面的问题不符，或它提到的指标/范围在当前数据里查不到，'
@@ -264,7 +317,17 @@ def ask(question, model=None, max_steps=None, profile=None):
     sql_calls = [t for t in trace if t.get('tool') == 'run_sql']
     kb_calls = [t for t in trace if t.get('tool') == 'kb_search']
     result = {
-        'input_question': question,
+        'input_question': raw_question,
+        'fixed_question': question,
+        'name_fix_used': fixed['used'],
+        'scope': {
+            'time': scope['time']['time_text'],
+            'period_type': scope['time']['period_type'],
+            'period_key': scope['time']['period_key'],
+            'time_is_default': scope['time']['is_default'],
+            'place': scope['place'],
+            'place_is_default': scope['place_default'],
+        },
         'user_profile': profile or '',
         'completion_used': used,
         'completed_question': completed,
@@ -273,6 +336,7 @@ def ask(question, model=None, max_steps=None, profile=None):
         'model': model,
         'elapsed_ms': int((time.time() - t_all) * 1000),
         'timings': {
+            'namefix_ms': namefix_ms,
             'completion_ms': done['ms'],
             'loop_ms': int((time.time() - t_loop) * 1000),
             'total_ms': int((time.time() - t_all) * 1000),

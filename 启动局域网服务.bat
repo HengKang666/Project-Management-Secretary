@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d D:\秘书智能体\secretary
+cd /d "%~dp0secretary"
 set SECRETARY_HOST=0.0.0.0
 echo 启动项目管理秘书（局域网可访问）...
 echo 下面会打印“同事访问”的地址，把那行连同端口发给同事即可。

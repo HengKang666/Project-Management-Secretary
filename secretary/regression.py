@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """回归：语义层 + 并发改造后，量摸底类调用、往返次数、耗时。逐题落盘供人工核对。"""
+import os
 import json
 import pathlib
 import sys
 import time
 
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r'D:\秘书智能体\secretary')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent
 import semantic
 
@@ -18,7 +19,7 @@ COMPLEX = [
 
 
 def load_questions():
-    src = pathlib.Path(r'D:\秘书智能体\secretary\e2e_test.py').read_text(encoding='utf-8')
+    src = pathlib.Path(pathlib.Path(__file__).resolve().parent / 'e2e_test.py').read_text(encoding='utf-8')
     start = src.index('QUESTIONS = [')
     end = src.index(']', start) + 1
     ns = {}
@@ -82,7 +83,7 @@ def main():
         if m['blocked_sql']:
             print('   拦下字典外表 %d 次' % m['blocked_sql'])
         print()
-    out = pathlib.Path(r'D:\秘书智能体\output')
+    out = pathlib.Path(pathlib.Path(__file__).resolve().parents[1] / 'output')
     (out / 'regression_v3.json').write_text(json.dumps(rows, ensure_ascii=False, indent=1, default=str), encoding='utf-8')
     n = len(rows)
     tot = {k: sum(r[k] or 0 for r in rows) for k in ('tools', 'budget_calls', 'kb', 'sql', 'blocked_sql')}

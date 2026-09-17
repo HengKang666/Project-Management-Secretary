@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
+import os
 import sys, io
-sys.path.insert(0, r'D:\秘书智能体\secretary')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import tools_db, agent
 print('=== 1) 单 % 的 LIKE 现在能不能查 ===')

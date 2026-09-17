@@ -19,11 +19,13 @@
 
 ## 二、怎么跑
 
-    cd D:\秘书智能体\secretary
+    cd <项目根目录>\secretary     # <项目根目录> 换成你实际 clone/解压的路径
     py -X utf8 server.py            # 只监听 127.0.0.1
 
     set SECRETARY_HOST=0.0.0.0      # 局域网可访问（或双击根目录 启动局域网服务.bat）
     py -X utf8 server.py
+
+> 更省事：直接双击根目录的 `启动演示页面.bat`（本机）或 `启动局域网服务.bat`（局域网）。两个脚本都用 `%~dp0` 定位自身所在目录，与项目放在哪个盘无关。
 
 **第一次跑先配凭据**：把根目录的 `.env.example` 复制成同目录的 `.env`，填 6 个必填项 —— `DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / LLM_BASE_URL / LLM_API_KEY`。`.env` 已被 `.gitignore` 忽略，不会进仓库。
 
@@ -41,7 +43,7 @@
 
 ## 三、分工与流程（五段）
 
-    ①上游信息补全（只补统计时间与地点）
+    ①信息补全（字面：纠错 + 名称归一，本服务；时间与地点：上游外置）
     ②问题补全（本服务，按知识库规则库）
     ③理解问题（查什么表 / 答哪些方面 —— 模型自己定）
     ④查库（run_sql，只读 + 白名单）
@@ -49,7 +51,8 @@
 
 | 阶段 | 谁做 | 本地代码里有什么 |
 |---|---|---|
-| ① 信息补全 | 上游（外置） | 无，/api/ask 只接一个 question |
+| ① 信息补全（字面） | 本服务 | name_fix.fix()：改错字（环谈→环潭）+ 名称归一（厉山→厉山供电所），零第三方依赖 |
+| ① 信息补全（时间/地点） | 上游（外置） | 无，/api/ask 只接一个 question |
 | ② 问题补全 | 本服务 | agent.complete_question()：去知识库取**补全规则切片** → 一次不带工具的模型调用 → 标准问题 |
 | ③ 理解问题 | 模型 | 只注入业务字典的**表目录 + 字段说明**与 5 个工具；没有任何「问题→表」的映射 |
 | ④ 查库 | 模型 | run_sql：只读闸 + 白名单（来自字典）+ 自动 LIMIT 200 |
@@ -77,6 +80,8 @@
 |---|---|
 | server.py | HTTP 服务 + 静态页；路由 /health /api/ask /api/asr /api/gaps |
 | agent.py | 五段流程主体：问题补全 + 模型自主循环 + 5 个工具定义 + trace |
+| name_fix.py | **阶段①字面补全**：错字纠正 + 名称归一；零依赖，失败自动降级不影响主流程（详见 docs/接入-名称纠错与归一.md） |
+| libs/name_correction_lib/ | 上面那步用的纠错引擎本体（标准库实现，附 8 个 CSV 词典与拼音表） |
 | semantic.py | 语义层（只读）：表目录、字段目录、白名单校验、SQL 抽表 |
 | tools_db.py | 只读闸、白名单拦截、list_tables / find_column / describe_table / run_sql |
 | tools_kb.py | 百炼知识检索客户端（只要切片，不要它生成的答案；limit 可调） |
@@ -101,7 +106,7 @@
 
 ## 八、常用命令
 
-    cd D:\秘书智能体\secretary
+    cd <项目根目录>\secretary
     py -X utf8 test_semantic.py     # 语义层自检（26 条断言，不依赖大模型）
     py -X utf8 e2e_test.py          # 27 题端到端
     py -X utf8 regression.py        # 30 题回归（含 3 道复杂题），落 output/regression_v3.json

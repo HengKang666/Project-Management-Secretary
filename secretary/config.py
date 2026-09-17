@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """配置：读本项目根目录的 .env（默认），模型可用环境变量切换。"""
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.environ.get('SECRETARY_ENV', os.path.join(os.path.dirname(HERE), '.env'))
@@ -13,6 +14,8 @@ def load_env(path=ENV_PATH):
         if not line or line.startswith('#') or '=' not in line:
             continue
         k, _, v = line.partition('=')
+        # 剥离行尾注释：仅当 '#' 前有空白时才算注释，避免截断含 '#' 的密码
+        v = re.split(r'\s+#', v, maxsplit=1)[0]
         d[k.strip()] = v.strip()
     return d
 
