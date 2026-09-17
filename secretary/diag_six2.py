@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import sys, io
-sys.path.insert(0, r'D:\秘书智能体\secretary')
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import agent
 QS = ['截至2026年9月，随州市全市，情况怎么样',

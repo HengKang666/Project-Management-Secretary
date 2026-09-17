@@ -38,7 +38,7 @@ QUESTIONS = [
     ('H拒答', '按台区统计，全市预算总额是多少？'),
 ]
 
-OUT = pathlib.Path(r'D:\秘书智能体\output')
+OUT = pathlib.Path(__file__).resolve().parent.parent / 'output'
 OUT.mkdir(parents=True, exist_ok=True)
 rows = []
 for i, (cat, q) in enumerate(QUESTIONS, 1):

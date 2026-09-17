@@ -2,7 +2,6 @@
 """原话测试：不预设标准问法，走完整流程（上游补全 → 模型自主查库 → 回答）。"""
 import json, pathlib, sys, time
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r'D:\秘书智能体\secretary')
 import agent
 
 RAW = [
@@ -78,7 +77,7 @@ for cat, q in COMPLEX:
     rows.append(m)
     print('   答：%s' % str(m.get('answer')).replace(chr(10), ' ')[:400])
     print('   %.1fs 工具%d 工具轮%d 并发max%d' % (m['seconds'], m['tools'], m['rounds'], m['max_parallel']))
-out = pathlib.Path(r'D:\秘书智能体\output')
+out = pathlib.Path(__file__).resolve().parent.parent / 'output'
 (out / 'e2e_raw_v1.json').write_text(json.dumps(rows, ensure_ascii=False, indent=1, default=str), encoding='utf-8')
 n = len(rows)
 print()

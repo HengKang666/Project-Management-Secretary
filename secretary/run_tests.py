@@ -25,7 +25,7 @@ QUESTIONS = [
     ('超范围', '截至2026年9月，全市的财政总收入是多少？'),
 ]
 
-OUT = pathlib.Path(r'D:\秘书智能体\output')
+OUT = pathlib.Path(__file__).resolve().parent.parent / 'output'
 out = OUT
 out.mkdir(parents=True, exist_ok=True)
 

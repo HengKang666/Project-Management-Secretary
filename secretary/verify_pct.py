@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import sys, io
-sys.path.insert(0, r'D:\秘书智能体\secretary')
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import tools_db, agent
 print('=== 1) 单 % 的 LIKE 现在能不能查 ===')
