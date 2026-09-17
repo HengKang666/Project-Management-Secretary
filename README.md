@@ -103,6 +103,7 @@
 ## 八、常用命令
 
     cd D:\秘书智能体\secretary
+    py -X utf8 env_check.py         # 【换机器部署后先跑这个】读的哪个 .env / 连的哪个库 / 提示词与字典有没有内容
     py -X utf8 test_semantic.py     # 语义层自检（26 条断言，不依赖大模型）
     py -X utf8 e2e_test.py          # 27 题端到端
     py -X utf8 regression.py        # 30 题回归（含 3 道复杂题），落 output/regression_v3.json
