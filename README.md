@@ -35,13 +35,14 @@
 | SECRETARY_MAX_STEPS | 0 | 工具步数上限，0 = 不限（模型自己收手） |
 | SECRETARY_KB_AGENT | aid-72fa8cae2b124d819617f157e97d0a1d | 知识检索服务（只绑 r57xtq9ypm） |
 | SECRETARY_KB_IDS | r57xtq9ypm | 只检索这个知识库 |
-| SECRETARY_TABLES | 空 | 限定可查的表；空 = 用字典里登记的全部（19 张） |
+| SECRETARY_TABLES | 空 | 限定可查的表；空 = 用字典里登记的全部（22 张） |
+| SECRETARY_COMPLETION_APP | e207644fd37247af957b7fbc613e6efc | 上游「信息补全」工作流应用 id（机构名纠错 + 统计时间） |
 
 端点：问答 POST /api/ask {question}（返回 answer/trace/timings）｜ 页面 GET / ｜ 语音页 /asr ｜ 健康 /health ｜ 缺口 GET /api/gaps ｜ 计划报告 POST /api/report {notice} ｜ 模拟通知 POST /api/report/notice {station} ｜ 报告参数 GET /api/report/meta。
 
 ## 三、分工与流程（五段）
 
-    ①上游信息补全（只补统计时间与地点）
+    ①上游信息补全（机构名自动纠错 + 统计时间）—— 调外置工作流应用
     ②问题补全（本服务，按知识库规则库）
     ③理解问题（查什么表 / 答哪些方面 —— 模型自己定）
     ④查库（run_sql，只读 + 白名单）
@@ -49,7 +50,7 @@
 
 | 阶段 | 谁做 | 本地代码里有什么 |
 |---|---|---|
-| ① 信息补全 | 上游（外置） | 无，/api/ask 只接一个 question |
+| ① 信息补全 | 上游（外置工作流应用） | agent.ask 第一步调它拿「纠正后的问题 + 本月/上月」，失败就跳过；结果只作参考，指标以原问题为准 |
 | ② 问题补全 | 本服务 | agent.complete_question()：去知识库取**补全规则切片** → 一次不带工具的模型调用 → 标准问题 |
 | ③ 理解问题 | 模型 | 只注入业务字典的**表目录 + 字段说明**与 5 个工具；没有任何「问题→表」的映射 |
 | ④ 查库 | 模型 | run_sql：只读闸 + 白名单（来自字典）+ 自动 LIMIT 200 |
@@ -84,7 +85,7 @@
 | tools_asr.py | 语音识别五阶段（/asr 页面用） |
 | config.py | 读 .env、模型清单、端口/主机、知识库、表范围 |
 | static/index.html、static/asr.html | 问答页（左回答 / 右过程）、语音页 |
-| tools_app.py | 上游补全应用客户端，**已不在链路里**（保留备查） |
+| tools_app.py | 上游「信息补全」工作流客户端（自动纠正机构名 + 补统计时间），agent.ask 的第一步 |
 | report.py | 年度缺陷治理计划分析：注入技能文档 + 通知数据，模型用现有工具自己查数、自己写报告（不写死 SQL）|
 | skills/数据表说明书.md | 每张表做什么、怎么设计、有哪些坑 —— 写别的分析 skill 也复用这份 |
 | skills/年度缺陷治理计划分析.md | 技能文档：分几节、每节查什么、怎么判断、不许做什么 |

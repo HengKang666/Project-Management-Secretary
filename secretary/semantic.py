@@ -173,7 +173,9 @@ def table_menu():
                 nm = c['column_name'] + (c['column_cn_name'] or '')
                 d = (c['business_desc'] or '').strip()
                 if d and d != (c['column_cn_name'] or '').strip() and len(d) >= 6:
-                    nm += '：' + d[:40]
+                    # 不截断：实测全文只比 [:40] 多 1054 字符（+6%），但截断会把「按名称筛选请用
+                    # scope_name」这类关键提醒砍掉，模型只看表级说明就会把所名填进 scope_key。
+                    nm += '：' + d
                 ev = (data['samples'].get(t['table_name']) or {}).get(c['column_name'])
                 if ev:
                     nm += '（例:' + ev[:30] + '）'

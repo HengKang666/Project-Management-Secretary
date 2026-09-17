@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """模型自主循环：只给工具与底线，不给流程。
 
-分工：上游只做「信息补全」（补统计时间与地点）；**问题补全由本服务负责** ——
-用知识库里的补全规则与术语词典，把口语问法补成标准问题，再查口径、取数、作答。
-全部在一个模型循环里由模型自己排顺序，代码不写业务流程，也不调用上游补全应用。
+分工：上游「信息补全」工作流负责机构名自动纠错与统计时间（本服务先调它、取出参）；
+**问题补全由本服务负责** —— 用知识库里的补全规则与术语词典，把口语问法补成标准问题，再查口径、取数、作答。
+全部在一个模型循环里由模型自己排顺序，代码不写业务流程。
 """
 import concurrent.futures
 import json
@@ -15,6 +15,7 @@ import urllib.request
 import config
 import gaps
 import semantic
+import tools_app
 import tools_db
 import tools_kb
 
@@ -184,17 +185,34 @@ def ask(question, model=None, max_steps=None, profile=None):
     max_steps = max_steps or config.MAX_STEPS
     t_all = time.time()
     trace = []
+    # 第一步：上游「信息补全」工作流（机构名自动纠错 + 统计时间）。失败不影响后续，只是少一层参考。
+    t_up = time.time()
+    try:
+        up = tools_app.complete_question(question)
+    except Exception as e:
+        up = {'text': '', 'error': type(e).__name__ + ': ' + str(e)[:200]}
+    up_text = (up.get('text') or '').strip()
+    up_ms = int((time.time() - t_up) * 1000)
+    trace.append({'seq': 1, 'kind': 'upstream', 'tool': 'info_completion',
+                  'ms': up_ms, 'args': {'input': question},
+                  'result': {'completed': up_text, 'error': up.get('error'),
+                             'request_id': up.get('request_id'), 'cached': up.get('cached')}})
     done = complete_question(question, model)
     completed = done['completed']
     # 判断（我们这边唯一的职责）：补全有没有产出与原文不同的内容 —— 相同就视为“没找到对应规则、不采用”
     used = bool(completed and completed.strip() and completed.strip() != question.strip())
-    trace.append({'seq': 1, 'kind': 'complete', 'tool': 'question_completion',
+    trace.append({'seq': 2, 'kind': 'complete', 'tool': 'question_completion',
                   'ms': done['ms'], 'args': {'input': question, 'rules': done['rules']},
                   'result': {'completed': completed, 'ok': done['ok'], 'used': used,
                              'reason': '按规则库补全' if used else '规则库没有对应问法，不采用补全'}})
     t_loop = time.time()
     # 问题为准；补全结果只作参考，由模型自己判断适不适用
-    user_content = question
+    user_content = '原始问题：' + question
+    if up_text:
+        user_content += ('\n\n【上游信息补全】上游「信息补全」工作流的出参：里面的机构名、地点名已按标准名'
+                         '纠正（例如把不存在的名称改成库里真实存在的名称），统计时间也已确定，'
+                         '查库时请直接采用其中的机构名与时间范围；如果它改写了问题的指标或问法，以原始问题为准。\n'
+                         + up_text)
     if used:
         user_content += ('\n\n【补全参考】按知识库的补全规则库，这个问法通常应补成下面这样。'
                          '它只是参考：如果与上面的问题不符，或它提到的指标/范围在当前数据里查不到，'
@@ -265,6 +283,8 @@ def ask(question, model=None, max_steps=None, profile=None):
     kb_calls = [t for t in trace if t.get('tool') == 'kb_search']
     result = {
         'input_question': question,
+        'upstream_text': up_text,
+        'upstream_error': up.get('error'),
         'user_profile': profile or '',
         'completion_used': used,
         'completed_question': completed,
@@ -273,6 +293,7 @@ def ask(question, model=None, max_steps=None, profile=None):
         'model': model,
         'elapsed_ms': int((time.time() - t_all) * 1000),
         'timings': {
+            'upstream_ms': up_ms,
             'completion_ms': done['ms'],
             'loop_ms': int((time.time() - t_loop) * 1000),
             'total_ms': int((time.time() - t_all) * 1000),

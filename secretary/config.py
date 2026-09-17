@@ -88,7 +88,11 @@ TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').spl
 PROMPTS = [x for x in os.environ.get('SECRETARY_PROMPTS',
     'answer_agent,business_rules,sql_plan_rules').replace(' ', '').split(',') if x]
 
-# 上游补全应用已不在链路里：上游只补时间与地点，问题补全由本服务在模型循环里做（见 agent.py）。
+# 上游「信息补全」工作流应用（含机构名自动纠错，如 凉水供电所→两水供电所）。
+# 出参 = 纠正后的问题 + 统计时间（本月/上月）。本服务在模型循环之前先调它，再叠加知识库补全。
+COMPLETION_APP_ID = os.environ.get('SECRETARY_COMPLETION_APP', 'e207644fd37247af957b7fbc613e6efc')
+COMPLETION_URL = (LLM_BASE.split('/compatible-mode')[0] +
+                  '/api/v1/apps/' + COMPLETION_APP_ID + '/completion')
 
 # 工具调用步数上限：0 = 不设上限（由模型自己决定什么时候收手）
 MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))

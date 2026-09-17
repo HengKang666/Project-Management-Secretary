@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
-"""上游「问题补全」应用客户端：把口语问法补成标准问题。
+"""上游「信息补全」工作流应用客户端：机构名自动纠错 + 补统计时间。
 
-调用方式（bl app call 的 --verbose 实测）：
-    POST https://dashscope.aliyuncs.com/api/v1/apps/<app_id>/completion
-    Authorization: Bearer <DashScope API Key>
-    {"input": {"prompt": "情况怎么样"}, "parameters": {}}
-返回：
-    {"output": {"finish_reason": "stop", "session_id": "...", "text": "查询截至2026年9月..."},
-     "usage": {"models": [{"input_tokens": 4026, "model_id": "balanced", "output_tokens": 582}]},
-     "request_id": "..."}
+应用 id 见 config.COMPLETION_APP_ID。调用（本工作区 MaaS 端点实测可通，dashscope 公网端点也可）：
+    POST <MaaS 域名>/api/v1/apps/<app_id>/completion
+    Authorization: Bearer <API Key>
+    {"input": {"prompt": "凉水供电所这个月线损率多少"}, "parameters": {}}
+返回（实测）：
+    {"output": {"finish_reason": "stop", "session_id": "...",
+                "text": "两水供电所这个月仙台区损率多少\n本月：2026年9月，上月：2026年8月"},
+     "usage": {}, "request_id": "..."}
+第一行是纠正后的问题（「凉水供电所」库里不存在，被改成真实的「两水供电所」），
+第二行是统计时间。耗时实测 0.5–0.6 秒（冷启动偶尔十几秒）。
+注意：该工作流会重写问题文本，偶发把指标名改坏（如「台区线损率」→「仙台区损率」），
+所以本服务只把它当参考，指标与问法仍以原始问题为准。
 """
 import json
 import ssl
