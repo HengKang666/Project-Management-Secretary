@@ -9,11 +9,12 @@
 !.env.example
 .credentials.yaml
 
-# 文档默认不收，只收 docs/ 与 skills/
+# 文档默认不收，只收 docs/ 与 skills/ 与 deploy/
 *.md
 !README.md
 !docs/**
 !skills/**
+!deploy/**
 
 # 以下几类放在最后，优先级最高，即使在上面目录里也不收
 secretary/电力业务口径文档.md

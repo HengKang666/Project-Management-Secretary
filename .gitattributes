@@ -1,0 +1,10 @@
+# 换行符规则：保证跨平台不坏文件
+#
+# 关键在 .sh —— 本机 core.autocrlf=true，如果不锁，Windows 上检出会变成 CRLF，
+# 再传到 Linux 就成了 `\r: command not found` 这类莫名其妙的报错。
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 其余按内容自动判定
+* text=auto
