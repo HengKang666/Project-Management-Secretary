@@ -1504,8 +1504,13 @@ class Corrector:
                     continue              # 已经是标准名 / 常用词 / 业务词
                 if any(c in STOP_CHARS for c in frag):
                     continue              # 含问句用词，是普通短语
-                if not all(ch in self.name_chars for ch in frag):
-                    continue              # 有字从没在名录里出现过 —— 不可能是个名字
+                # 名录里没出现过的字，不该**一票否决**：
+                # 库里写的是「九棵松」，用户说「九颗松」，「颗」自然不在 name_chars 里 ——
+                # 可**同音错字恰恰是这一层最该处理的情况**，整段被挡掉就再没机会了。
+                # 改成「至少一半的字在名录里」：粗筛仍能挡掉纯噪声，
+                # 真正的判断交给 _best_name（它内部有拼音码 + 汉字重合两道判据）。
+                if sum(1 for ch in frag if ch in self.name_chars) * 2 < len(frag):
+                    continue
                 if self._decomposable(frag):
                     continue              # 能切成已知词，不是专有名词
                 hit = self._best_name(frag)
