@@ -7,7 +7,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.environ.get('SECRETARY_ENV', os.path.join(os.path.dirname(HERE), '.env'))
 
 
+REQUIRED = ('DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'LLM_BASE_URL', 'LLM_API_KEY')
+
+_TEMPLATE_HINT = (
+    '\n[配置] 缺少 %s\n'
+    '       这个文件不在仓库里（含密码，刻意不入库），需要自己建一份：\n'
+    '\n'
+    '         cp .env.example .env        # Linux / macOS\n'
+    '         copy .env.example .env      # Windows\n'
+    '\n'
+    '       然后把 6 项填上：%s\n'
+    '       各项说明见 .env.example 里的注释。\n'
+)
+
+
 def load_env(path=ENV_PATH):
+    if not os.path.exists(path):
+        raise SystemExit(_TEMPLATE_HINT % (path, ' / '.join(REQUIRED)))
     d = {}
     for line in open(path, encoding='utf-8'):
         line = line.strip()
@@ -17,6 +33,11 @@ def load_env(path=ENV_PATH):
         # 剥离行尾注释：仅当 '#' 前有空白时才算注释，避免截断含 '#' 的密码
         v = re.split(r'\s+#', v, maxsplit=1)[0]
         d[k.strip()] = v.strip()
+    missing = [k for k in REQUIRED if not d.get(k)]
+    if missing:
+        raise SystemExit('[配置] %s 里这些项还是空的：%s\n'
+                         '       填好再启动（说明见 .env.example）。'
+                         % (path, ' / '.join(missing)))
     return d
 
 

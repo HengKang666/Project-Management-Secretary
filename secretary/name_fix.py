@@ -47,14 +47,30 @@ def _corrector():
         _CORRECTOR = Corrector()
     except Exception as e:                      # noqa: BLE001
         _FAILED = True
+        # flush：这个提示只在首次调用时打一次，日志重定向时若被缓冲就永远看不到
         print('[namefix] 纠错库加载失败，本步降级（不影响主流程）：%s: %s'
-              % (type(e).__name__, e))
+              % (type(e).__name__, e), flush=True)
     return _CORRECTOR
 
 
 def available():
     """本步当前是否可用（页面/自测可以据此显示状态）。"""
     return bool(_enabled() and _corrector() is not None)
+
+
+def status():
+    """本步状态与原因，供 /health 与页面显示。
+
+    词典（libs/name_correction_lib/data/）不入库，clone 下来默认是缺的：
+    服务照跑、问答照答，**但纠错与归一静默失效**。所以要能一眼看出来，
+    否则只能靠比对 name_fix_used 才发现。
+    """
+    if not _enabled():
+        return {'available': False, 'reason': '已通过 SECRETARY_NAMEFIX=0 关闭'}
+    if _corrector() is None:
+        return {'available': False,
+                'reason': '纠错词典未就绪（libs/name_correction_lib/data/ 缺失），本步已降级'}
+    return {'available': True, 'reason': ''}
 
 
 def fix(question):

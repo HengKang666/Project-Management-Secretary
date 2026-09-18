@@ -44,6 +44,25 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    @staticmethod
+    def _health():
+        """ok 只说明服务活着；name_fix 才说明「纠错/归一动没动」。
+
+        纠错词典不在仓库里（含两万条真实台区名录），clone 下来默认是缺的 ——
+        服务照跑、问答照答，但纠错与归一静默失效。不报出来就没人发现得了。
+        """
+        out = {'ok': True, 'model': agent.config.MODEL}
+        try:
+            import name_fix
+            st = name_fix.status()
+            out['name_fix'] = st['available']
+            if not st['available']:
+                out['name_fix_reason'] = st['reason']
+        except Exception as e:                  # noqa: BLE001
+            out['name_fix'] = False
+            out['name_fix_reason'] = '%s: %s' % (type(e).__name__, e)
+        return out
+
     def do_GET(self):
         path = self.path.split('?')[0]
         if path in ('/', '/index.html'):
@@ -53,7 +72,7 @@ class H(BaseHTTPRequestHandler):
             with open(os.path.join(HERE, 'static', 'asr.html'), encoding='utf-8') as f:
                 self._send(200, f.read(), 'text/html')
         elif path == '/health':
-            self._send(200, json.dumps({'ok': True, 'model': agent.config.MODEL}), 'application/json')
+            self._send(200, json.dumps(self._health()), 'application/json')
         elif path == '/api/asr/sample':
             sample = os.path.join(os.path.dirname(HERE), 'output', 'sample_asr.mp3')
             if os.path.exists(sample):
