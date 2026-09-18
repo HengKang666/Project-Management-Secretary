@@ -1600,6 +1600,14 @@ class Corrector:
             # 0.78 会把「电力局」对到「电信局专变」(0.824)，属于明显误改。
             if sc < RESOLVE_FUZZY_MIN and sc < 99.9:
                 continue
+            # 相似度是按「读音」算的，只看读音会出事：
+            # 「结合意」(jiehei) 与台区「解河」(jiehe) 读音相似度 90.9，
+            # 可这两个字面**一个字都不重合** —— 它其实是「结合｜意见」切出来的碎片，
+            # 用户问的是「结合意见工单…」，不是某个台区，结果被改成「解河见工单…」。
+            # 所以再加一道「汉字至少重合一个字」的栅栏（按位对齐比）：
+            # 「公家彭」vs「龚家棚」重合一个「家」—— 仍然放行，不影响真正的归一。
+            if not any(a == b for a, b in zip(core, self.area_core_str.get(nm, ""))):
+                continue
             if nm not in seen:
                 pool.append(nm)
                 seen.add(nm)
