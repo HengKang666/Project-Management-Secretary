@@ -82,6 +82,9 @@ PUNCT = re.compile(r"[\s\-_·、，,。.（）()\[\]【】《》]")
 NAME_CHAR = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9#\-]")
 HAN = re.compile(r"[\u4e00-\u9fa5]")          # 单个汉字
 HAN_RUN = re.compile(r"[\u4e00-\u9fa5]+")     # 连续汉字（用于判断整个片段是否纯汉字）
+# 连续「名称字符」：地名可能以数字开头（「9棵松」），也可能中段带编号（「白鹤1#」）。
+# 滑窗加长时按这个判 —— 用纯汉字判（HAN_RUN）会把它们整段挡在门外。
+NAME_CHAR_RUN = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9#\-]+")
 MAX_NAME_LEN = 20
 # 片段里出现这些词，才按「完整名称」去匹配（避免把普通词误当名称）
 SUFFIX_HINT = ("供电", "变电站", "电站", "台区", "变压器", "公变", "专变", "室变", "箱变")
@@ -1491,12 +1494,16 @@ class Corrector:
 
         n = len(text)
         for i in range(n):
-            if not HAN.match(text[i]):
+            # 起点可以是汉字，也可以是数字 —— 地名本身可能以数字开头（「9棵松」），
+            # 只认汉字的话，「9颗松」整段都进不了滑窗，后面再准的判据也用不上。
+            if not (HAN.match(text[i]) or text[i].isdigit()):
                 continue
             for L in range(min(6, n - i), 1, -1):
                 frag = text[i:i + L]
-                if not HAN_RUN.fullmatch(frag):
+                if not NAME_CHAR_RUN.fullmatch(frag):
                     break
+                if not HAN.search(frag):
+                    continue              # 纯数字不成名字
                 if blocked(i, i + L):
                     continue              # 已经在某个标准名里面
                 key = normalize(frag)
