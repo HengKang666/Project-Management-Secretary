@@ -1753,7 +1753,14 @@ class Corrector:
         if len(rest) > 6 or (rest and not any(ch.isdigit() for ch in rest)):
             return None
 
-        name = cp + (f"{qd[0]}#" if qd else "") + (self._said_suffix(frag) or "台区")
+        # 编号只能取自「地名之后」那一段。
+        # 「九棵松」这个地名**本身就含数字**（九→9），如果直接拿整个 core 里的数字
+        # 当编号，就会合成出库里根本没有的「9棵松9#台区」——
+        # 用户问的是整片「九棵松台区」，这样一改等于替他挑了 9# 那一个。
+        # 取 core 去掉地名之后剩下的部分：「龚家棚3号」→ tail="3号" → 编号 3；
+        # 「9棵松」→ tail="" → 没有编号。
+        tail_digits = tuple(DIGIT_RUN.findall(core[len(cp):]))
+        name = cp + (f"{tail_digits[0]}#" if tail_digits else "") + (self._said_suffix(frag) or "台区")
         # 第三个返回值是「LIKE 前缀」= 地名核心，由引擎给出而不是让下游自己猜 ——
         # 下游要写 `name LIKE '龚家棚%'`，若自己从合成名里截类型词，
         # 「白鹤变压器」会被截成「白鹤变压器%」（查不到「白鹤1#变压器」）。
