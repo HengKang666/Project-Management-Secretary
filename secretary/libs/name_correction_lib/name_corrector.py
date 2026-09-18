@@ -1760,11 +1760,20 @@ class Corrector:
         # 取 core 去掉地名之后剩下的部分：「龚家棚3号」→ tail="3号" → 编号 3；
         # 「9棵松」→ tail="" → 没有编号。
         tail_digits = tuple(DIGIT_RUN.findall(core[len(cp):]))
-        name = cp + (f"{tail_digits[0]}#" if tail_digits else "") + (self._said_suffix(frag) or "台区")
+        # ⚠️ 返回给下游的「地名」必须用**库里的原始写法**，不能用规范化后的核心：
+        # 核心把「九」转成了「9」，而库里存的是「九棵松3#公变」——
+        # 拿「9棵松」去写 `LIKE '9棵松%'`，**一条都查不到**（试过，返回 0 行）。
+        # 核心与原始名逐字对应（canon_digits 基本不改变字数），
+        # 取同长度那一段即可还原；「十→10」这类会让字数变的，
+        # 用 canon_digits 回代校验一次，对不上就退回核心写法。
+        display = group[0][1][:len(cp)]
+        if canon_digits(display) != cp:
+            display = cp
+        name = display + (f"{tail_digits[0]}#" if tail_digits else "") + (self._said_suffix(frag) or "台区")
         # 第三个返回值是「LIKE 前缀」= 地名核心，由引擎给出而不是让下游自己猜 ——
         # 下游要写 `name LIKE '龚家棚%'`，若自己从合成名里截类型词，
         # 「白鹤变压器」会被截成「白鹤变压器%」（查不到「白鹤1#变压器」）。
-        return name, [nm for _, nm in group[:10]], cp
+        return name, [nm for _, nm in group[:10]], display
 
     @staticmethod
     def _said_suffix(frag: str) -> str:
