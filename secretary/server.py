@@ -65,6 +65,9 @@ class H(BaseHTTPRequestHandler):
             import gaps as gapsmod
             rows = gapsmod.list_gaps(int((self.path.split('limit=') + ['200'])[1]) if 'limit=' in self.path else 200)
             self._send(200, json.dumps({'total': len(rows), 'rows': rows}, ensure_ascii=False), 'application/json')
+        elif path == '/api/skills':
+            import report as reportmod
+            self._send(200, json.dumps({'skills': reportmod.list_skill_docs()}, ensure_ascii=False), 'application/json')
         elif path == '/api/report/meta':
             import report as reportmod
             y = reportmod.latest_year()
@@ -103,8 +106,9 @@ class H(BaseHTTPRequestHandler):
             return
         max_steps = data.get('max_steps') or None
         profile = (data.get('profile') or '').strip() or None
+        skills = (data.get('skills') or '').strip() or None
         try:
-            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile)
+            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, skills=skills)
         except Exception as e:
             r = {'question': q, 'answer': '服务异常：' + type(e).__name__ + ' ' + str(e), 'trace': [],
                  'no_db_query': True, 'db_query_count': 0, 'elapsed_ms': 0, 'steps': 0}

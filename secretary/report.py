@@ -59,6 +59,28 @@ def _system():
     ])
 
 
+def list_skill_docs():
+    """列出 skills/ 下的技能文档（名字 + 标题 + 正文），供页面选用。"""
+    out = []
+    try:
+        for fn in sorted(os.listdir(SKILL_DIR)):
+            if not fn.lower().endswith('.md'):
+                continue
+            try:
+                txt = _read(os.path.join(SKILL_DIR, fn))
+            except Exception:
+                continue
+            title = ''
+            for ln in txt.splitlines():
+                if ln.startswith('# '):
+                    title = ln[2:].strip()
+                    break
+            out.append({'name': fn, 'title': title, 'chars': len(txt), 'content': txt})
+    except Exception:
+        pass
+    return out
+
+
 def _notice_text(notice):
     lines = ['【本次收到的预算分配通知】',
              '供电所：%s' % notice.get('station'),

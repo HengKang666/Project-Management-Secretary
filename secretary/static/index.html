@@ -65,6 +65,12 @@
       <textarea id="profile" rows="2" placeholder="用户画像（可选，辅助问题补全）：例如 我是市公司运检部专责，只看全市和随县，重点看线损与工单"
         style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #e3e6ea;border-radius:8px;font-family:inherit;font-size:13px;resize:vertical"></textarea>
     </div>
+    <div style="margin-top:10px">
+      <select id="skillpick" onchange="pickSkill()" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #e3e6ea;border-radius:8px;font-size:13px"></select>
+      <textarea id="skills" rows="3" placeholder="技能配置（可选，和用户画像一样随时可改）：粘一份「该怎么答」的规范进来，模型会按它来查数与作答。也可以从上面的下拉框选一份 skills/ 里的文档载入。"
+        style="width:100%;box-sizing:border-box;margin-top:6px;padding:9px 11px;border:1px solid #e3e6ea;border-radius:8px;font-family:inherit;font-size:13px;resize:vertical"></textarea>
+      <div class="hint" id="skillnote"></div>
+    </div>
     <div class="card" style="margin-top:14px">
       <p class="lbl">回答</p>
       <div id="completed"></div>
@@ -119,8 +125,9 @@ function ask(){
   var model=document.getElementById('model').value;
   var profile=document.getElementById('profile').value.trim();
   try{localStorage.setItem('secretary_profile',profile);}catch(e){}
+  try{localStorage.setItem('secretary_skills',document.getElementById('skills').value);}catch(e){}
   fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({question:q,model:model,profile:profile})})
+        body:JSON.stringify({question:q,model:model,profile:profile,skills:document.getElementById('skills').value})})
    .then(function(r){return r.json();})
    .then(function(d){
      document.getElementById('completed').textContent=(d.user_profile?('用户画像：'+d.user_profile+String.fromCharCode(10)):'')+(d.completed_question?('补全参考（仅参考，以问题为准）：'+d.completed_question):'');
@@ -185,6 +192,22 @@ function collectNotice(){
   n.metrics=(NOTICE&&NOTICE.metrics||[]).map(function(m){ var c={}; for(var k2 in m){ c[k2]=m[k2]; } if(!isNaN(sc[m.key])){c.cur_score=sc[m.key];} return c; });
   return n;
 }
+var SKILLS=[];
+function loadSkills(){
+  fetch('/api/skills').then(function(r){return r.json();}).then(function(d){
+    SKILLS=d.skills||[];
+    var s=document.getElementById('skillpick'); s.innerHTML='<option value="">（不用技能文档）</option>';
+    SKILLS.forEach(function(k,i){var o=document.createElement('option');o.value=String(i);o.textContent=k.name+'（'+k.chars+' 字）';s.appendChild(o);});
+    try{var v=localStorage.getItem('secretary_skills');if(v){document.getElementById('skills').value=v;document.getElementById('skillnote').textContent='已恢复上次的 '+v.length+' 字技能配置';}}catch(e){}
+  }).catch(function(){});
+}
+function pickSkill(){
+  var i=document.getElementById('skillpick').value;
+  if(i===''){document.getElementById('skills').value='';document.getElementById('skillnote').textContent='';return;}
+  var k=SKILLS[parseInt(i,10)];
+  if(k){document.getElementById('skills').value=k.content;document.getElementById('skillnote').textContent='已载入 '+k.name+'（'+k.chars+' 字），可以直接改';}
+}
+loadSkills();
 loadReportMeta();
 
 function mdInline(s){

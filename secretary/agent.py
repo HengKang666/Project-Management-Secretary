@@ -135,7 +135,7 @@ def complete_question(question, model=None):
 _FALLBACK = '你是随州供电公司的项目管理秘书，负责回答业务问题。'
 
 
-def _system():
+def _system(skills=None):
     """系统提示 = 他们在 ai_prompt 里维护的提示词（config.PROMPTS 指定的 key）
     + 业务字典的表目录。**提示词不在代码里写死**。
     """
@@ -148,6 +148,8 @@ def _system():
     except Exception:
         pass
     head = '\n\n'.join(parts).strip() or _FALLBACK
+    if skills and skills.strip():
+        head += ('\n\n【本轮技能文档：用户配置的作答规范，必须严格按它来查数与组织回答】\n' + skills.strip())
     try:
         return head + '\n\n【可用数据表（只能查这些，字典外的表一律不可用）】\n' + semantic.table_menu()
     except Exception:
@@ -176,7 +178,7 @@ def _exec_calls(calls):
         return list(ex.map(_one_call, calls))
 
 
-def ask(question, model=None, max_steps=None, profile=None):
+def ask(question, model=None, max_steps=None, profile=None, skills=None):
     """question = 上游信息补全后的问题（时间与地点已明确）。
 
     profile = 用户画像（可选）：补全阶段不使用；与补全后的问题一起交给模型拆解任务。
@@ -219,7 +221,7 @@ def ask(question, model=None, max_steps=None, profile=None):
                          '以问题为准，忽略不适用的部分。\n' + completed)
     if profile:
         user_content += ('\n\n用户画像（用于判断统计范围与关注重点，不要因此增减问题里已经要求的必答项）：\n' + profile)
-    messages = [{'role': 'system', 'content': _system()}, {'role': 'user', 'content': user_content}]
+    messages = [{'role': 'system', 'content': _system(skills)}, {'role': 'user', 'content': user_content}]
     answer = ''
     nudged = False
     blocked = False
@@ -286,6 +288,7 @@ def ask(question, model=None, max_steps=None, profile=None):
         'upstream_text': up_text,
         'upstream_error': up.get('error'),
         'user_profile': profile or '',
+        'skills_chars': len((skills or '').strip()),
         'completion_used': used,
         'completed_question': completed,
         'answer': answer,
