@@ -60,6 +60,15 @@
       <div id="triggers" class="tgrid"></div>
     </div>
     <div class="card" style="margin-bottom:12px">
+      <p class="lbl">状态变更模拟 —— 选一个工单 + 变更后的状态，按规则自动触发对应技能并提醒对应角色</p>
+      <div class="bar" style="flex-wrap:wrap">
+        <select id="scOrder" style="flex:2;min-width:260px"></select>
+        <select id="scRule" style="flex:1;min-width:220px"></select>
+        <button id="scGo" onclick="fireStateChange()">模拟状态变更</button>
+      </div>
+      <div class="hint" id="scNote"></div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
       <p class="lbl">年度缺陷治理计划分析 —— 模拟收到一份「预算分配通知」（本期数字是模拟的，可以直接改；换供电所会重新生成）</p>
       <div class="bar" style="flex-wrap:wrap">
         <select id="rstation" title="供电所" onchange="loadNotice()"></select>
@@ -239,6 +248,29 @@ document.getElementById('triggers').addEventListener('click',function(e){
   fireTrigger(b.getAttribute('data-sid'), parseInt(b.getAttribute('data-qi'),10));
 });
 loadTriggers();
+var SCRULES=[], SCORDERS=[];
+function loadStateChange(){
+  fetch('/api/statechange').then(function(r){return r.json();}).then(function(d){
+    SCRULES=d.rules||[]; SCORDERS=d.orders||[];
+    var s=document.getElementById('scOrder'); s.innerHTML='';
+    SCORDERS.forEach(function(o,i){var op=document.createElement('option');op.value=String(i);op.textContent=o.status_cn+' ｜ '+o.work_name+' ｜ '+(o.budget/10000).toFixed(2)+'万';s.appendChild(op);});
+    var rl=document.getElementById('scRule'); rl.innerHTML='';
+    SCRULES.forEach(function(r,i){var op=document.createElement('option');op.value=String(i);op.textContent=r.from+' → '+r.to+' （触发：'+r.skill+'）';rl.appendChild(op);});
+    document.getElementById('scNote').textContent='规则 '+SCRULES.length+' 条；假数据工单 '+SCORDERS.length+' 条（取自真实未完结工单）。点按钮会按规则带上对应技能文档。';
+  }).catch(function(){});
+}
+function fireStateChange(){
+  var o=SCORDERS[parseInt(document.getElementById('scOrder').value,10)];
+  var r=SCRULES[parseInt(document.getElementById('scRule').value,10)];
+  if(!o||!r){return;}
+  var q=r.question.split('{work_name}').join(o.work_name).split('{from}').join(r.from).split('{to}').join(r.to);
+  document.getElementById('q').value=q;
+  var t=TRIGGERS[r.skill_id];
+  document.getElementById('skills').value=(t&&t.doc_text)||'';
+  document.getElementById('skillnote').textContent='规则 '+r.id+'：'+r.from+' → '+r.to+'，触发「'+r.skill+'」，提醒对象：'+r.role;
+  ask();
+}
+loadStateChange();
 var SKILLS=[];
 function loadSkills(){
   fetch('/api/skills').then(function(r){return r.json();}).then(function(d){

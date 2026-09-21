@@ -65,6 +65,9 @@ class H(BaseHTTPRequestHandler):
             import gaps as gapsmod
             rows = gapsmod.list_gaps(int((self.path.split('limit=') + ['200'])[1]) if 'limit=' in self.path else 200)
             self._send(200, json.dumps({'total': len(rows), 'rows': rows}, ensure_ascii=False), 'application/json')
+        elif path == '/api/statechange':
+            import report as reportmod
+            self._send(200, json.dumps(reportmod.state_change_sim(), ensure_ascii=False, default=str), 'application/json')
         elif path == '/api/triggers':
             import report as reportmod
             self._send(200, json.dumps(reportmod.list_triggers(), ensure_ascii=False), 'application/json')

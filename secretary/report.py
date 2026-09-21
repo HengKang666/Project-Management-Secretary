@@ -59,6 +59,30 @@ def _system():
     ])
 
 
+def state_change_sim():
+    """状态变更触发台的素材：规则表 + 一批真实工单当假数据（含当前状态中文）。"""
+    import json as _json
+    p = os.path.join(SKILL_DIR, '状态变更规则.json')
+    try:
+        with open(p, encoding='utf-8') as f:
+            cfg = _json.load(f)
+    except Exception as e:
+        return {'rules': [], 'orders': [], 'error': str(e)[:200]}
+    sql = ("SELECT w.work_name, w.budget_total, w.work_status, d.data_label AS status_cn "
+           "FROM t_power_work_order w JOIN t_dict t ON t.dict_code='WORK_STATUS' "
+           "JOIN t_dict_data d ON d.dict_id=t.dict_id AND d.data_value=w.work_status "
+           "WHERE w.deleted_flag=0 AND w.work_status IN ('1','2','3','6','7') ORDER BY w.id DESC LIMIT 8")
+    try:
+        rows = tools_db.run_sql(sql).get('rows') or []
+    except Exception as e:
+        rows, _ = [], None
+    orders = [{'work_name': r.get('work_name'), 'budget': float(r.get('budget_total') or 0),
+               'status_cn': r.get('status_cn')} for r in rows]
+    cfg['orders'] = orders
+    cfg['sql'] = sql
+    return cfg
+
+
 def list_triggers():
     """读 skills/技能触发配置.json，并把对应技能文档正文带上，供前端触发台渲染。"""
     import json as _json
