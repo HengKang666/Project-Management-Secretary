@@ -59,7 +59,7 @@ def _system(doc_text=None):
     ])
 
 
-def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None, role='', scope='', use_doc=True):
+def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None, role='', scope='', use_doc=True, inputs=None):
     """触发一个技能：把它的整组问题 + 技能文档一起交给模型，一次跑完出一份结果。"""
     t0 = time.time()
     cfg = list_triggers()
@@ -80,6 +80,10 @@ def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None,
                  '**所有数据只能取这个范围内的**，并且要说清是在这个范围下的结论；范围外的不要给。\n'
                  % (role or (sk.get('role') or ''), scope or '全部'))
     head += '你的角色：%s。\n' % (role or sk.get('role') or '')
+    if inputs:
+        head += ('上游系统传过来的数据（业务系统推过来的原文，直接采用，不要改动；如果与库里的数据不一致，以这份为准并说明）：\n')
+        for it in inputs:
+            head += '  - %s：%s\n' % (it.get('label') or '', it.get('value') or '')
     if work_name:
         head += ('刚刚发生了一次状态变更：工单「%s」从「%s」变为「%s」。请结合这次变更来答。\n' % (work_name, frm, to))
     head += ('下面是这个技能要你回答的 %d 个问题，**请合并成一份回答**（不要一问一答地重复），'

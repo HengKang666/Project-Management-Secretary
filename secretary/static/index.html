@@ -251,6 +251,15 @@ function showSkill(){
     h+='<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;color:#1a6fd4">查看这个技能的文档（'+k.doc_text.length+' 字）—— 它才是决定「怎么答」的固定流程</summary>'
      +'<pre style="max-height:280px;font-size:11.5px;background:#fafbfc;border:1px solid #eef0f2;border-radius:6px;padding:8px;margin-top:6px;white-space:pre-wrap">'+esc(k.doc_text)+'</pre></details>';
   }
+  if(k.inputs && k.inputs.length){
+    h+='<div style="font-size:12.5px;color:#7b838d;margin:8px 0 3px">上游传过来的数据（<b>可以直接改</b>，改了就按你改的算）：</div>';
+    k.inputs.forEach(function(it,i){
+      h+='<div style="display:flex;gap:8px;align-items:center;margin:4px 0">'
+       +'<span style="min-width:140px;font-size:12.5px;color:#5b6470">'+esc(it.label)+'</span>'
+       +'<input class="sin" data-label="'+esc(it.label)+'" value="'+esc(it.value)+'" style="flex:1;padding:6px 9px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px">'
+       +'</div>';
+    });
+  }
   if(k.trigger==='state'){
     h+='<div style="margin-top:8px;font-size:12.5px;color:#7b838d">状态变更规则（选工单 + 选规则，点触发即按规则拼问题并提醒对应角色）：</div>';
     h+='<div class="bar" style="flex-wrap:wrap;margin-top:6px"><select id="scOrder" style="flex:2;min-width:240px"></select><select id="scRule" style="flex:1;min-width:200px"></select></div>';
@@ -264,6 +273,13 @@ function showSkill(){
     TRULES.forEach(function(r,i){var op=document.createElement('option');op.value=String(i);op.textContent=r.from+' → '+r.to+'（提醒 '+r.role+'）';sr.appendChild(op);});
   }
 }
+function collectInputs(){
+  var out=[];
+  Array.prototype.forEach.call(document.querySelectorAll('.sin'), function(el){
+    out.push({label: el.getAttribute('data-label'), value: el.value});
+  });
+  return out;
+}
 function collectQs(){
   var out=[]; var all=document.querySelectorAll('.sq'), chk=document.querySelectorAll('.sqc');
   Array.prototype.forEach.call(all, function(el,i){ if(chk[i] && chk[i].checked && el.value.trim()){ out.push(el.value.trim()); } });
@@ -273,7 +289,7 @@ function runCompare(){
   var k=TSEL; if(!k)return;
   var qs=collectQs();
   if(!qs.length){ document.getElementById('cmpA').textContent='至少勾一条问题。'; return; }
-  var base={skill_id:k.id,questions:qs,
+  var base={skill_id:k.id,questions:qs,inputs:collectInputs(),
     role:(document.getElementById('roleSel')||{value:''}).value,
     scope:(document.getElementById('scopeSel')||{value:''}).value,
     model:document.getElementById('model').value};
@@ -299,7 +315,7 @@ function runSkill(){
   if(!qs.length){ b.disabled=false; b.textContent='触发这个技能'; document.getElementById('answer').textContent='至少勾一条问题。'; return; }
   var body={skill_id:k.id,model:document.getElementById('model').value,questions:qs,
         role:(document.getElementById('roleSel')||{value:''}).value,
-        scope:(document.getElementById('scopeSel')||{value:''}).value};
+        scope:(document.getElementById('scopeSel')||{value:''}).value,inputs:collectInputs()};
   if(k.trigger==='state'){
     var o=TORDERS[parseInt((document.getElementById('scOrder')||{value:'0'}).value,10)]||{};
     var r=TRULES[parseInt((document.getElementById('scRule')||{value:'0'}).value,10)]||{};
