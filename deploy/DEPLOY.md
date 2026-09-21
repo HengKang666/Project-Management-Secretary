@@ -1,20 +1,56 @@
 # 服务端部署说明
 
+> ## ⚠️ 这是 2.0 版，比 1.0 多一件事：**要先建记录库**
+>
+> 2.0 新增「对话记录 + 多轮上下文 + 历史会话」功能，问答会自动写入一个 **`agent_data`** 库。
+>
+> **升级步骤：**
+> 1. 上传下面 8 个文件（或整个目录覆盖），**别覆盖 `.env`**。
+> 2. 重启服务：`sudo systemctl restart secretary`。
+> 3. 自检：`curl -s http://127.0.0.1:8200/health` → 应有 `"qa_log": true`。
+>
+> **记录库已经建好了**（`agent_data`，6 张表 + 2 个测试账号，就在同一台 MySQL 上），
+> **不用再执行建表 SQL**。建表脚本 `agent_data_建表.sql` 留作参考：
+> 换服务器 / 重建环境时才需要跑一次。
+>
+> ### 只上传这 8 个文件就够（其余 53 个完全没变）
+>
+> ```
+> 【新增】
+>   .env.example                        配置项说明（可选，方便以后查）
+>   secretary/qa_log.py                 ★核心：落库 + 历史查询
+>   secretary/给同事的接口对接说明.md       ← 注意：在 secretary/ 同级的根目录
+>
+> 【覆盖】
+>   secretary/agent.py                  ★核心：多轮上下文 + 落库调用
+>   secretary/server.py                 ★核心：3 个新接口
+>   secretary/config.py                 新增 AGENT_DB / HISTORY_TURNS
+>   secretary/time_scope.py             ★核心：本轮没说时沿用上一轮口径
+>   DEPLOY.md                           本文档
+> ```
+>
+> `__pycache__` / `*.pyc` 是运行时生成的，**不要传**。
+> 验证方式：见「八、2.0 新增：对话记录库」。
+
 ## 一、上传什么
 
-整个 `deploy_server/` 目录（53 个文件，约 3.7 MB），传到你服务器的任意目录，例如 `/opt/secretary/`。
+整个 `deploy_server2.0/` 目录（约 3.8 MB），传到你服务器的任意目录，例如 `/opt/secretary/`。
 
 ```
-deploy_server/
+deploy_server2.0/
 ├── .env                  ← 【必须】数据库 + 模型凭据，含密码，别传到公开位置
+├── .env.example          ← 配置项说明（可选项都在里面）
 ├── secretary/            ← 【必须】服务代码
-│   ├── server.py         ← 入口
+│   ├── server.py         ← 入口（问答 + 历史会话接口）
 │   ├── agent.py / config.py / semantic.py / time_scope.py / name_fix.py
+│   ├── qa_log.py         ← 【2.0 新增】对话记录落库 + 历史查询
 │   ├── tools_db.py / tools_kb.py / tools_asr.py / gaps.py / report.py
 │   ├── libs/name_correction_lib/   ← 名称纠错与归一引擎（含 7 个 CSV 词典）
 │   └── static/           ← 问答页面
 ├── start.sh              ← Linux 启动脚本
-└── start.bat             ← Windows 启动脚本
+├── start.bat             ← Windows 启动脚本
+├── install_service.sh    ← 一键装 systemd 常驻服务
+└── 给同事的接口对接说明.md  ← 可直接转发给调用方
 ```
 
 不需要 `docs/`、`skills/`、`verify/`、`output/` —— 那些是本地开发和测试用的。
@@ -181,3 +217,79 @@ netstat -tlnp | grep 8200        # 要看到 0.0.0.0:8200，不是 127.0.0.1:820
 | 能访问但答「服务异常」 | 库或模型连不上 | 跑第二节那个自检脚本 |
 | 换了网络后同事打不开 | 服务器 IP 变了 | 重新看启动窗口打印的地址 |
 | 关掉窗口就断 | 前台进程 | 用 `bash start.sh -d` 或 systemd |
+| **`/health` 里 `qa_log: false`** | **记录库没建 / 连不上** | **见下面第八节**；此时问答正常，只是不留记录 |
+| **`/api/sessions` 返回空** | 记录库刚建、还没人问过 ／ `qa_log` 是 false | 先问一句再看 |
+
+---
+
+## 八、2.0 新增：对话记录库
+
+### 8.1 这是干什么的
+
+每次问答会自动往 `agent_data` 库写：
+
+| 表 | 一行代表什么 |
+|---|---|
+| `t_chat_session` | 一场会话 |
+| `t_chat_message` | 一条消息（一问一答算 2 条） |
+| `t_chat_query_trace` | 一次问答的口径与质量（纠错命中 / 时间地点 / 查库次数 / 是否可信 / 用户评价） |
+| `t_chat_trace_step` | 问答内部的每一步（纠错 / 补全 / 工具调用 / SQL / 作答） |
+
+有了它，问答页面之外还能对外提供**历史对话列表**和**历史对话记录**接口（见《给同事的接口对接说明.md》）。
+
+### 8.2 建库（一次性）
+
+```bash
+mysql -h 47.121.183.81 -u <账号> -p < agent_data_建表.sql
+```
+
+脚本会：
+- 建 `agent_data` 库（**排序规则固定 `utf8mb4_general_ci`**，与 `dlj_data` 一致，否则跨库 JOIN 会报 `1267`）
+- 建 6 张表
+- 预置 2 个测试账号（`PROV-FIN-001` / `STATION-HEAD-001`）
+
+> 脚本最后有一条**故意报错**的语句（验证唯一约束真的拦得住重复消息），
+> 看到 `Duplicate entry '1-1' for key 'uk_session_seq'` **是正常的**。
+
+**幂等**：脚本可以重复执行（表会 DROP 重建，测试账号靠唯一键不会插成 4 条）。
+但**注意会清掉已有记录** —— 生产上重跑前先备份。
+
+### 8.3 配置
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `SECRETARY_AGENT_DB` | `agent_data` | 记录写到哪个库 |
+| `SECRETARY_QA_LOG` | 开 | 设 `0` 则整个记录功能关闭（服务照跑，不留记录） |
+| `SECRETARY_HISTORY_TURNS` | `5` | **多轮上下文**：同一会话带最近 N 轮问答。设 `0` = 关闭，回到「每次提问完全独立」 |
+
+用的是**同一台 MySQL、同一个账号**，只是库名不同，所以 `.env` 不用改也能用。
+
+### 8.4 关掉记录功能
+
+```bash
+SECRETARY_QA_LOG=0 bash start.sh -d
+```
+
+用途：记录库还没建好、或临时不想写库时。关掉后 `/health` 里 `qa_log` 为 `false` 并附原因。
+
+### 8.5 自检
+
+```bash
+# 1) 服务侧
+curl -s http://127.0.0.1:8200/health        # 要有 "qa_log": true
+
+# 2) 问一句，再看历史
+curl -s -X POST http://127.0.0.1:8200/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"环潭供电所的线损率","uid":"PROV-FIN-001"}' --max-time 90
+curl -s "http://127.0.0.1:8200/api/sessions?uid=PROV-FIN-001"
+
+# 3) 记录库侧
+mysql -h 47.121.183.81 -u <账号> -p -e "
+SELECT COUNT(*) FROM agent_data.t_chat_session;
+SELECT id,uid,username,role FROM agent_data.t_user;"
+```
+
+**关键：落库失败不会影响问答。** 记录库连不上时，问答照常返回，
+只是响应里 `qa_id` 为 `null`、`/health` 里 `qa_log` 为 `false`，日志里会有一行
+`[qa_log] 落库失败（不影响回答）：…`。

@@ -143,10 +143,13 @@ def _mk(matched, text, ptype, pkey, is_default=False, note='', q=None):
             'rewritten': rewritten}
 
 
-def resolve(question, today=None):
+def resolve(question, today=None, prev=None):
     """解析问题里的时间说法。返回 dict（字段见 _mk）。
 
-    优先级：具体年月 > 具体年 > 具体月 > 相对说法 > 默认（今年至今）。
+    优先级：具体年月 > 具体年 > 具体月 > 相对说法 > **沿用上一轮** > 默认（今年至今）。
+
+    prev = 上一轮的统计范围（同一场会话）。**只在问题完全没提时间时才生效** ——
+    用户这轮说了时间就必须用他说的。
     """
     q = str(question or '')
     today = today or datetime.date.today()
@@ -213,13 +216,23 @@ def resolve(question, today=None):
                    note='库里没有季度口径，只能按 %d 年 %d-%d 月取累计值，'
                         '回答时要说清这是区间累计而不是季度指标。' % (cur_y, sm, em), q=q)
 
-    # ⑦ 什么都没有 → 默认今年至今
+    # ⑦ 什么都没说 → 优先沿用上一轮，其次默认今年至今
+    if prev and prev.get('period_type') and prev.get('period_key'):
+        return _mk('', prev.get('time_text') or str(prev.get('period_key')),
+                   prev['period_type'], prev['period_key'], is_default=True,
+                   note='问题里没说时间，沿用上一轮的「%s」（多轮会话）。'
+                        % (prev.get('time_text') or prev.get('period_key')), q=q)
     return _mk('', '%d年1-%d月' % (cur_y, cur_m), 'yearToDate', ym, is_default=True,
                note='问题里没说时间，按「今年至今」理解。', q=q)
 
 
 # 供电所/公司名单（从纠错库里取一次，按长度降序）
 _UNITS = {'list': None}
+# 简称表：把「国网随县供电公司」这类全名剥成核心「随县」，用于认出用户说的简称。
+# 只认长度 >= 2 的核心，避免「所」「站」这类一个字的核心误命中。
+_UNIT_CORES = {'list': None}
+_STRIP_HEAD = ('国网', '湖北省', '湖北省电力', '随州市', '随州', '中国')
+_STRIP_TAIL = ('供电服务站', '供电服务公司', '供电有限公司', '供电公司', '供电所', '服务站', '公司', '供电')
 
 
 def _units():
@@ -237,6 +250,35 @@ def _units():
             out = []
         _UNITS['list'] = out
     return _UNITS['list']
+
+
+def _strip_unit(name):
+    """把全名剥成核心：国网随县供电公司 → 随县；环潭供电所 → 环潭。"""
+    s = str(name or '').strip()
+    changed = True
+    while changed:
+        changed = False
+        for h in _STRIP_HEAD:
+            if s.startswith(h) and len(s) > len(h) + 1:
+                s = s[len(h):]
+                changed = True
+        for t in _STRIP_TAIL:
+            if s.endswith(t) and len(s) > len(t) + 1:
+                s = s[:-len(t)]
+                changed = True
+    return s.strip()
+
+
+def _unit_cores():
+    """核心 → 全名，长的核心排前面。"""
+    if _UNIT_CORES['list'] is None:
+        d = {}
+        for nm, _k in _units():
+            core = _strip_unit(nm)
+            if len(core) >= 2 and core not in d:
+                d[core] = nm
+        _UNIT_CORES['list'] = sorted(d.items(), key=lambda x: -len(x[0]))
+    return _UNIT_CORES['list']
 
 
 def place_of(fixed, question=''):
@@ -259,20 +301,50 @@ def place_of(fixed, question=''):
     for nm, _k in _units():
         if nm in blob:
             return nm
+    # 只说了简称（「随县」而名单里是「国网随县供电公司」）时，用核心名兜一道。
+    # 放在全名匹配之后：全名命中优先，避免简称把更具体的地名抢走。
+    for core, full in _unit_cores():
+        if core in blob:
+            return full
     return ''
 
 
-def describe(question, fixed=None):
-    """一步到位：返回 {time, place, scope_text, question}。
+# 「明说是全市范围」的说法。place_of 对「明说全市」和「什么都没说」都返回空串，
+# 所以多轮里判断"要不要沿用上一轮地点"时，必须靠这几个词把两者分开。
+_WHOLE_CITY = ('全市', '整个市', '市局', '各区县', '各县区', '各个区县', '所有区县', '各县', '各所')
+
+
+def _says_whole_city(question):
+    """问题里是不是**明说**要全市范围（而不是"没说地点"）。"""
+    q = str(question or '')
+    return any(w in q for w in _WHOLE_CITY)
+
+
+def describe(question, fixed=None, prev=None):
+    """一步到位：返回 {time, place, scope_text, question, inherited}。
 
     scope_text 是给模型看的【统计范围】说明；question 是补全后的完整问题。
         · 相对时间词（上月/本月/今年…）会被换成具体时间，写回问题里；
-        · 问题里没时间、没地点 → 补默认值，但**不改写原问题**，只附说明，
-          免得把用户的原话改得面目全非。
+        · 问题里没时间、没地点 → **优先沿用上一轮**（多轮会话），
+          再没有才补默认值（今年至今 / 全市）；沿用与默认都**不改写原问题**，
+          只附说明，免得把用户的原话改得面目全非。
+
+    prev = 上一轮的统计范围（同一场会话）：{period_type, period_key, time_text, place}
     """
-    t = resolve(question)
-    place = place_of(fixed, question) or '全市'
-    place_default = (place == '全市')
+    t = resolve(question, prev=prev)
+    place = place_of(fixed, question)
+    place_default = False
+    place_inherited = False
+    if not place:
+        # 没认出地点：上一轮有、且这轮没明说「全市」这类范围词 → 沿用上一轮。
+        # 注意必须排除「全市」：place_of 对「明说全市」和「什么都没说」都返回空串，
+        # 不加这一个判断，用户问「那全市的呢」会被错误地沿用到上一轮的供电所。
+        if prev and prev.get('place') and not _says_whole_city(question):
+            place = prev['place']
+            place_inherited = True
+        else:
+            place = '全市'
+            place_default = True
     ym = _latest_ym()
     cur_y, cur_m = int(ym[:4]), int(ym[4:6])
 
@@ -281,10 +353,16 @@ def describe(question, fixed=None):
                  % (t['time_text'],
                     {'month': '当月', 'year': '全年', 'yearToDate': '本年累计'}.get(t['period_type'], ''),
                     t['period_type'], t['period_key']))
-    # 「用的默认值」这类说明由 note 给出（resolve 里已写好），这里不重复一遍
+    # 「用的默认值 / 沿用上一轮」这类说明由 note 给出（resolve 里已写好），这里不重复
     if t['note']:
         lines.append('      ' + t['note'])
-    lines.append('地点：%s%s' % (place, '（问题里没说地点，默认全市）' if place_default else ''))
+    if place_inherited:
+        # 沿用的地点是**推断**出来的，不是用户这轮说的 —— 必须允许模型推翻，
+        # 否则用户换成别的简称（我们没认出来的）就会被错误地按上一轮的口径查。
+        lines.append('地点：%s（本轮问题里没认出地点，沿用上一轮。'
+                     '**如果本轮问题里其实提到了别的地点，以问题里说的为准**）' % place)
+    else:
+        lines.append('地点：%s%s' % (place, '（问题里没说地点，默认全市）' if place_default else ''))
 
     # 口径可用性：提前说清，免得模型取不到数就干巴巴回一句「未找到」
     if t['period_type'] == 'month':
@@ -306,4 +384,6 @@ def describe(question, fixed=None):
                          '要供电所的数请改用本年累计。')
 
     return {'time': t, 'place': place, 'place_default': place_default,
+            'inherited': {'time': bool(t['note'] and '沿用上一轮' in t['note']),
+                          'place': place_inherited},
             'scope_text': '\n'.join(lines), 'question': t['rewritten'] or question}

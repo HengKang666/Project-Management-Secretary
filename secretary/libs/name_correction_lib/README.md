@@ -121,7 +121,7 @@ if not n.exact:
 
 ## 六、换成自己领域的数据
 
-`data/` 下 7 个 CSV 就是全部知识：
+`data/` 下 7 个 CSV 就是全部知识（改用数据库时，对应 7 张 `t_nc_*` 表，见第七节）：
 
 | 文件 | 内容 | 是否要改 |
 |---|---|---|
@@ -145,3 +145,31 @@ if not n.exact:
 2. `catalog.csv` / `area_core.csv` 的码列：改了模糊音规则就要重算。
 
 口径不一致的表现是「看着像却匹配不上」——不报错，只是匹配率悄悄下降。
+
+## 七、数据源：默认读 CSV，也可以换成数据库
+
+本库默认读同目录 `data/` 下的 CSV。**也支持把词典放进数据库**，由外部注入数据源：
+
+```python
+from name_correction_lib import use_source, Corrector
+
+use_source(MysqlSource())        # src 只需实现 read(key) -> list[dict]
+c = Corrector()                  # ★ 换源后必须重新构造，已有实例不会自动刷新
+```
+
+三条约定：
+
+1. **键名必须与 CSV 表头一致**（如 `错误写法`、`拼音码`、`核心码`）。库内部所有取值
+   都写的是 CSV 列名，映射集中在你那一侧，**库代码一行都不用改**。
+2. **表/文件缺失时必须抛 `FileNotFoundError`**。库里的降级逻辑
+   （`area_core` 没有索引就现算、`wordlist` 可选）靠捕获这个异常类型工作；
+   抛别的异常（比如数据库驱动的 `OperationalError`）会让降级失效、整个库构造失败。
+3. 换源后本地 `data/` 整目录都可以删掉，本库不会去找它。
+
+> **数据库只在「加载词典」时用到一次。** 四万多行全量读进内存、建好索引后就不再查库，
+> 之后每次纠错都是纯内存运算。
+> **数据库是词典存放的地方，不是纠错时要去问的对象** —— 把检索也改成查库，
+> 最坏情况会从 49ms 变成 95 秒（每个候选一次网络往返，而 `difflib` 相似度无法下推成 SQL）。
+
+本项目（项目管理秘书）的实现见服务层的 `secretary/lex_source.py`，
+建表见 `tools/lexicon_schema.sql`，导入见 `tools/import_lexicon.py`。

@@ -2,6 +2,14 @@
 """接入示例 —— 直接运行：python example_usage.py
 
 演示两个能力，以及**最关键的一条约定**：合成名要按前缀查。
+
+★ 前置条件：需要同目录下有 data/（7 个 CSV），否则构造 Corrector 会抛
+  FileNotFoundError。本项目（项目管理秘书）的词典已搬进数据库，
+  部署包里**没有 data/** —— 要在本项目里试，请改用服务层：
+      from name_correction_lib import use_source
+      from lex_source import MysqlSource
+      use_source(MysqlSource())
+  或者直接跑服务层的自测：  python ../../name_fix.py
 """
 import sys
 from pathlib import Path

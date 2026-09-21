@@ -58,11 +58,13 @@
       <div id="rmetrics" style="margin-top:10px"></div>
     </div>
     <div class="bar">
-      <input id="q" placeholder="输入上游信息补全后的问题（时间、地点已明确），例如：截至2026年9月，全市的预算总额是多少？" />
+      <input id="q" placeholder="直接说人话就行（错字、简称、漏写时间地点都能听懂），例如：环潭供电所上个月的线损率" />
       <button id="go" onclick="ask()">提问</button>
+      <button id="newchat" onclick="newSession()" style="background:#f4f5f7;color:#3b4653;border:1px solid #e3e6ea">新会话</button>
     </div>
+    <div id="sessbar" style="margin-top:7px;font-size:12px;color:#8a95a1"></div>
     <div style="margin-top:10px">
-      <textarea id="profile" rows="2" placeholder="用户画像（可选，辅助问题补全）：例如 我是市公司运检部专责，只看全市和随县，重点看线损与工单"
+      <textarea id="profile" rows="2" placeholder="用户画像（可选）：例如 我是市公司运检部专责，只看全市和随县，重点看线损与工单"
         style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #e3e6ea;border-radius:8px;font-family:inherit;font-size:13px;resize:vertical"></textarea>
     </div>
     <div class="card" style="margin-top:14px">
@@ -72,7 +74,8 @@
       <div id="report"></div>
       <div id="meta"></div>
     </div>
-    <div class="hint">时间与地点由上游信息补全提供；问题补全、查口径、取数、作答都由模型自己排顺序。本页不预设任何业务规则。</div>
+    <div class="hint">同一场会话里会记住上一轮：这一轮没说时间、地点时会沿用上一轮（例如问完「环潭供电所上个月的线损率」，再说「那售电量呢」）。
+      点「新会话」即从零开始。时间与地点由代码按今天日期算好，问题补全、查口径、取数、作答由模型自己排顺序。</div>
   </div>
   <div class="card">
     <p class="lbl">处理过程（工具调用轨迹）</p>
@@ -106,7 +109,32 @@ document.getElementById('model').addEventListener('change',function(){
   document.getElementById('modelnote').textContent=MODELNOTE[this.value]||'';
 });
 loadModels();
+setSession(getSession());
 function tagCls(t){return t==='kb_search'?'t-kb':(t==='run_sql'?'t-db':(t==='answer'?'t-ans':'t-meta'));}
+
+/* ---------------- 会话（多轮记忆） ----------------
+   服务端靠 session_id 记住同一场会话，并把它作为上下文交给模型。
+   页面把它存在 localStorage：刷新浏览器也不丢；点「新会话」才重新开始。 */
+function getSession(){
+  var s=null;
+  try{s=localStorage.getItem('secretary_session');}catch(e){}
+  return s||'';
+}
+function setSession(s){
+  try{localStorage.setItem('secretary_session',s||'');}catch(e){}
+  var el=document.getElementById('sessbar');
+  if(el){el.textContent=s?('当前会话：'+s+'（同一场会话里，本轮没说的时间和地点会沿用上一轮）'):'未开始会话，下次提问会自动新建一场';}
+}
+function newSession(){
+  setSession('');
+  document.getElementById('answer').textContent='';
+  document.getElementById('completed').textContent='';
+  document.getElementById('meta').textContent='';
+  document.getElementById('trace').innerHTML='';
+  document.getElementById('q').value='';
+  document.getElementById('q').focus();
+}
+
 function ask(){
   var q=document.getElementById('q').value.trim();
   if(!q)return;
@@ -120,17 +148,26 @@ function ask(){
   var profile=document.getElementById('profile').value.trim();
   try{localStorage.setItem('secretary_profile',profile);}catch(e){}
   fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({question:q,model:model,profile:profile})})
+        body:JSON.stringify({question:q,model:model,profile:profile,
+                             session_id:getSession()||undefined,uid:'PROV-FIN-001'})})
    .then(function(r){return r.json();})
    .then(function(d){
+     if(d.session_id)setSession(d.session_id);      /* 首问服务端会生成并回传 */
      document.getElementById('completed').textContent=(d.user_profile?('用户画像：'+d.user_profile+String.fromCharCode(10)):'')+(d.completed_question?('补全参考（仅参考，以问题为准）：'+d.completed_question):'');
       document.getElementById('answer').textContent=d.answer||'（空）';
      var w=d.no_db_query?'<span class="warn">本次未查询数据库</span>':'';
      var tm=d.timings||{};
      var gap=d.recorded_as_gap?'<span class="warn" style="background:#ffe8e6;color:#a12a20">已记入缺口清单</span>':'';
+     /* 口径：把「本轮说的」和「沿用上一轮的」区分开，避免以为是说错了 */
+     var sc=d.scope||{}, scTxt='';
+     if(sc.time){
+       scTxt='<span class="warn" style="background:#eef4ff;color:#2d5bb9">口径：'+esc(sc.time)+' / '+esc(sc.place||'')
+            +((sc.time_inherited||sc.place_inherited)?'（沿用上一轮）':'')+'</span>';
+     }
      document.getElementById('meta').innerHTML='模型 '+esc(d.model||model)+' · 工具调用 '+d.steps+' 次（查库 '
         +d.db_query_count+' 次 / 知识库 '+d.kb_query_count+' 次）· 总耗时 '+(d.elapsed_ms/1000).toFixed(1)+' 秒'
-         +'（补全 '+((tm.completion_ms||0)/1000).toFixed(1)+'s + 循环 '+((tm.loop_ms||0)/1000).toFixed(1)+'s）'+w+gap;
+         +'（补全 '+((tm.completion_ms||0)/1000).toFixed(1)+'s + 循环 '+((tm.loop_ms||0)/1000).toFixed(1)+'s）'
+         +' · 会话上下文 '+(d.history_used||0)+' 轮'+w+gap+scTxt;
      var h='';
      (d.trace||[]).forEach(function(s){
        var cls=tagCls(s.tool||s.kind);

@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
-"""本地演示服务：GET / 页面，POST /api/ask，GET /health。标准库实现，零额外依赖。"""
+"""演示服务：GET / 页面、/health、/api/sessions、/api/history；
+POST /api/ask、/api/feedback。标准库实现，零额外依赖。
+
+问答会自动落库到 agent_data（会话/消息/执行明细），历史接口从这里读。
+落库由 qa_log.py 负责，**失败不影响问答**。
+"""
 import json
 import os
+import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import agent
 import tools_asr
@@ -12,6 +21,32 @@ ASR_DIR = os.path.join(os.path.dirname(HERE), 'output', 'asr')
 PORT = int(os.environ.get('SECRETARY_PORT', '8200'))
 # 默认只听本机；要局域网访问就设 SECRETARY_HOST=0.0.0.0
 HOST = os.environ.get('SECRETARY_HOST', '127.0.0.1')
+
+
+def _preheat():
+    """后台预热纠错词典，并把结果打进启动日志。
+
+    为什么需要：db 模式下词典要从数据库拉四万多行，冷启动约 7 秒
+    （CSV 模式只要 0.3 秒）。放后台线程，不挡服务启动，
+    等第一个请求进来时通常已经加载好了。
+
+    顺便把「就绪 / 未就绪 + 原因」写进启动日志 —— 词典缺失时纠错是**静默失效**的，
+    启动日志里有这么一行，比事后靠比对 name_fix_used 去排查省事得多。
+    """
+    def work():
+        try:
+            import name_fix
+            t0 = time.time()
+            ok = name_fix.available()
+            st = name_fix.status()
+            print('[启动] 纠错词典%s（数据源 %s，耗时 %.1fs）%s'
+                  % ('就绪' if ok else '未就绪', st.get('source', '?'),
+                     time.time() - t0, '' if ok else '：' + st.get('reason', '')),
+                  flush=True)
+        except Exception as e:                    # noqa: BLE001
+            print('[启动] 纠错词典预热异常（不影响服务运行）：%s: %s'
+                  % (type(e).__name__, e), flush=True)
+    threading.Thread(target=work, daemon=True, name='namefix-preheat').start()
 
 
 def _lan_ips():
@@ -46,22 +81,43 @@ class H(BaseHTTPRequestHandler):
 
     @staticmethod
     def _health():
-        """ok 只说明服务活着；name_fix 才说明「纠错/归一动没动」。
+        """ok 只说明服务活着；name_fix / qa_log 才说明两个「附属能力」动没动。
 
-        纠错词典不在仓库里（含两万条真实台区名录），clone 下来默认是缺的 ——
-        服务照跑、问答照答，但纠错与归一静默失效。不报出来就没人发现得了。
+        这两个都可能静默失效：
+        - name_fix：词典默认从 agent_data 的 t_nc_* 表读（SECRETARY_LEXICON=db），
+                    表没建 / 表是空的 / 连不上 → 错字纠正静默不生效；
+                    改成 file 模式时，则是 libs 下的 data/ 缺失
+        - qa_log  ：记录库没建表 / 连不上 → 问答照答，但对话记录静默不落库
+        不报出来就没人发现得了，所以都在这里暴露，并带上各自的 _source。
         """
         out = {'ok': True, 'model': agent.config.MODEL}
-        try:
-            import name_fix
-            st = name_fix.status()
-            out['name_fix'] = st['available']
-            if not st['available']:
-                out['name_fix_reason'] = st['reason']
-        except Exception as e:                  # noqa: BLE001
-            out['name_fix'] = False
-            out['name_fix_reason'] = '%s: %s' % (type(e).__name__, e)
+        for mod, key in (('name_fix', 'name_fix'), ('qa_log', 'qa_log')):
+            try:
+                m = __import__(mod)
+                st = m.status()
+                out[key] = st['available']
+                if st.get('source'):
+                    out[key + '_source'] = st['source']
+                if not st['available']:
+                    out[key + '_reason'] = st['reason']
+            except Exception as e:              # noqa: BLE001
+                out[key] = False
+                out[key + '_reason'] = '%s: %s' % (type(e).__name__, e)
         return out
+
+    def _query(self):
+        """解析 query string，取每个参数的第一个值（顺手把 limit 转成 int）。"""
+        q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+        for k in ('limit', 'offset'):
+            if k in q:
+                try:
+                    q[k] = int(q[k])
+                except (TypeError, ValueError):
+                    q.pop(k)
+        return q
+
+    def _send_json(self, obj, code=200):
+        self._send(code, json.dumps(obj, ensure_ascii=False, default=str), 'application/json')
 
     def do_GET(self):
         path = self.path.split('?')[0]
@@ -93,6 +149,15 @@ class H(BaseHTTPRequestHandler):
         elif path == '/api/models':
             self._send(200, json.dumps({'default': agent.config.MODEL,
                                         'models': agent.config.MODELS}, ensure_ascii=False), 'application/json')
+        elif path == '/api/sessions':
+            # 历史对话列表：一行一场会话，按最后活动时间倒序
+            self._handle_sessions()
+        elif path == '/api/history':
+            # 某场会话的历史对话记录（消息 + 每条回答的口径/质量信息）
+            self._handle_history()
+        elif path == '/api/stats':
+            # 记录库概览：问答量 / 缺口数 / 未核实数 / 纠错命中数
+            self._handle_stats()
         else:
             self._send(404, 'not found', 'text/plain')
 
@@ -107,27 +172,100 @@ class H(BaseHTTPRequestHandler):
         if path == '/api/report':
             self._handle_report()
             return
+        if path == '/api/feedback':
+            self._handle_feedback()
+            return
         if path != '/api/ask':
             self._send(404, 'not found', 'text/plain')
             return
-        n = int(self.headers.get('Content-Length') or 0)
-        try:
-            data = json.loads(self.rfile.read(n).decode('utf-8') or '{}')
-        except Exception:
-            data = {}
+        data = self._read_json()
         q = (data.get('question') or '').strip()
         model = data.get('model') or None
         if not q:
-            self._send(200, json.dumps({'answer': '问题为空', 'trace': []}, ensure_ascii=False), 'application/json')
+            self._send_json({'answer': '问题为空', 'trace': []})
             return
         max_steps = data.get('max_steps') or None
         profile = (data.get('profile') or '').strip() or None
+        # 记录用参数（都可选，不传也能用）：
+        #   session_id 不传 → 服务端生成一个并回显，前端存下来即可做多轮与历史
+        #   uid / user_code → 业务用户ID（如 PROV-FIN-001），落库时换成内部主键
+        session_id = (data.get('session_id') or '').strip() or ('s_' + uuid.uuid4().hex)
+        user_code = (data.get('uid') or data.get('user_code') or '').strip() or None
+        user_id = data.get('user_id') or None
+        user_name = (data.get('user_name') or '').strip() or None
+        channel = (data.get('channel') or '').strip() or None
+        # 多轮上下文轮数：不传用配置默认（SECRETARY_HISTORY_TURNS，默认 5）；传 0 = 本次不用上下文
+        history_turns = data.get('history_turns')
+        client_ip = self.client_address[0] if self.client_address else None
         try:
-            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile)
+            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile,
+                          session_id=session_id, user_id=user_id, user_code=user_code,
+                          client_ip=client_ip, channel=channel, history_turns=history_turns)
         except Exception as e:
-            r = {'question': q, 'answer': '服务异常：' + type(e).__name__ + ' ' + str(e), 'trace': [],
+            r = {'input_question': q, 'question': q, 'session_id': session_id,
+                 'answer': '服务异常：' + type(e).__name__ + ' ' + str(e), 'trace': [],
                  'no_db_query': True, 'db_query_count': 0, 'elapsed_ms': 0, 'steps': 0}
-        self._send(200, json.dumps(r, ensure_ascii=False, default=str), 'application/json')
+        if user_name:
+            r['user_name'] = user_name
+        self._send_json(r)
+
+    # ------------------------------------------------ 历史会话相关
+
+    def _handle_sessions(self):
+        """历史对话列表。query: uid / limit / offset"""
+        q = self._query()
+        try:
+            import qa_log
+            rows = qa_log.list_sessions(user_code=q.get('uid') or q.get('user_code'),
+                                        limit=q.get('limit') or 20, offset=q.get('offset') or 0)
+            self._send_json({'total': len(rows), 'sessions': rows})
+        except Exception as e:                  # noqa: BLE001
+            self._send_json({'total': 0, 'sessions': [], 'error': '%s: %s' % (type(e).__name__, str(e)[:200])})
+
+    def _handle_history(self):
+        """某场会话的历史对话记录。query: session_id（必填）/ limit / with_steps=1"""
+        q = self._query()
+        sid = (q.get('session_id') or q.get('session') or '').strip()
+        if not sid:
+            self._send_json({'error': '缺少 session_id'}, 400)
+            return
+        try:
+            import qa_log
+            r = qa_log.get_history(sid, limit=q.get('limit') or 200,
+                                   with_steps=str(q.get('with_steps') or '') in ('1', 'true', 'yes'))
+            if r is None:
+                self._send_json({'error': 'session 不存在', 'session_id': sid}, 404)
+                return
+            self._send_json(r)
+        except Exception as e:                  # noqa: BLE001
+            self._send_json({'error': '%s: %s' % (type(e).__name__, str(e)[:200]),
+                             'session_id': sid}, 500)
+
+    def _handle_stats(self):
+        try:
+            import qa_log
+            self._send_json(qa_log.stats())
+        except Exception as e:                  # noqa: BLE001
+            self._send_json({'error': '%s: %s' % (type(e).__name__, str(e)[:200])}, 500)
+
+    def _handle_feedback(self):
+        """给某次回答打评价。body: {qa_id, feedback(1赞/0踩), note?}"""
+        data = self._read_json()
+        qa_id = data.get('qa_id')
+        if qa_id in (None, ''):
+            self._send_json({'error': '缺少 qa_id（取 /api/ask 返回里的 qa_id）'}, 400)
+            return
+        try:
+            fb = int(data.get('feedback'))
+        except (TypeError, ValueError):
+            self._send_json({'error': 'feedback 必须是 1（赞）或 0（踩）'}, 400)
+            return
+        try:
+            import qa_log
+            n = qa_log.set_feedback(qa_id, fb, data.get('note'))
+            self._send_json({'ok': n > 0, 'updated': n, 'qa_id': qa_id, 'feedback': fb})
+        except Exception as e:                  # noqa: BLE001
+            self._send_json({'error': '%s: %s' % (type(e).__name__, str(e)[:200])}, 500)
 
     def _read_json(self):
         n = int(self.headers.get('Content-Length') or 0)
@@ -194,4 +332,5 @@ if __name__ == '__main__':
             print('同事访问：http://%s:%d' % (ip, PORT))
     else:
         print('（当前只监听 %s，同事访问不了；要开局域网：set SECRETARY_HOST=0.0.0.0）' % HOST)
+    _preheat()
     ThreadingHTTPServer((HOST, PORT), H).serve_forever()

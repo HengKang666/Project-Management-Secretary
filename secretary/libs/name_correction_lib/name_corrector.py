@@ -17,10 +17,17 @@
          相似度用 difflib.SequenceMatcher。
        —— 早先依赖 pypinyin，为了能进「标准库实现、零额外依赖」的项目而去掉了。
 
-性能关键：索引**直接读 CSV 里预计算好的「拼音码 / 核心码」列**，不重算两万条词典
+性能关键：索引**直接读数据源里预计算好的「拼音码 / 核心码」列**，不重算两万条词典
   → 冷启动从 5.4 秒降到 0.2 秒，这是能上 FC 的关键，也是能当库用的关键。
+  ⚠ 所以搬进数据库时这几列必须原样存进去，**不能让服务启动时现算**（两万条要 4 秒）。
 
-数据放在同目录 data/ 下。
+数据放在同目录 data/ 下（默认）。也支持把词典搬进数据库、由外部注入数据源：
+    from name_corrector import use_source, Corrector
+    use_source(MysqlSource())       # src 需实现 read(key) -> list[dict]
+    Corrector()                     # ★ 换源后必须重新构造，已有实例不会自动刷新
+这时本地 data/ 整目录都可以删掉 —— 本模块不会去找它。
+（数据库那一侧的实现见服务层的 secretary/lex_source.py；
+ 本模块刻意不认识数据库，以保持零第三方依赖、可单独拷贝。）
 """
 from __future__ import annotations
 
@@ -55,8 +62,41 @@ def _resolve_data_dir() -> Path:
 DATA = _resolve_data_dir()
 
 
+# ---------------- 词典数据源（默认读同目录 data/ 下的 CSV；可注入数据库实现） ----------------
+#   ★ 本模块【不认识数据库】：只认 read(key) -> list[dict] 这一个接口，
+#     所以它依然零第三方依赖，仍可被单独拷贝使用（云函数、客户私有化部署）。
+#     数据库那一侧的实现放在服务层（secretary/lex_source.py），不在这里。
+#
+#   key 就是 CSV 文件名（如 "typo.csv"），返回的 dict 键名与 CSV 表头一致，
+#   因此下面所有 r["错误写法"]、r["拼音码"] 这类取值一行都不用改。
+_SOURCE = None
+
+
+def use_source(src) -> None:
+    """切换词典数据源；传 None 恢复读本地 CSV。
+
+    src 必须实现 `read(key: str) -> list[dict]`，并且
+    **表/文件缺失时要抛 FileNotFoundError** —— 下面的降级逻辑
+    （area_core 没有索引文件就现算、wordlist 可选）全靠这个异常类型判断，
+    换成别的异常（比如数据库的 OperationalError）降级就会失效、服务直接起不来。
+
+    ★ 切换后已有的 Corrector 实例不会自动更新，必须重新构造一个。
+    """
+    global _SOURCE, _PINYIN_TABLE_CACHE
+    _SOURCE = src
+    # 拼音表是模块级缓存，换源必须清掉，否则换完还在用上一个源的表
+    _PINYIN_TABLE_CACHE = None
+
+
+def data_source_name() -> str:
+    """当前数据源的名字，供健康检查显示（csv / MysqlSource / ...）。"""
+    return "csv" if _SOURCE is None else type(_SOURCE).__name__
+
+
 def describe_data() -> str:
-    """给出数据目录的实际情况，便于排查部署问题。"""
+    """给出数据来源的实际情况，便于排查部署问题。"""
+    if _SOURCE is not None:
+        return f"[诊断] 数据源：{type(_SOURCE).__name__}（词典由外部提供，非本地 CSV）"
     if not DATA.is_dir():
         return f"[诊断] 数据目录不存在：{DATA}"
     files = sorted(p.name for p in DATA.iterdir())
@@ -155,16 +195,16 @@ def _load_pinyin_table() -> dict[str, tuple[str, str]]:
     if _PINYIN_TABLE_CACHE is None:
         table: dict[str, tuple[str, str]] = {}
         try:
-            with (DATA / PINYIN_TABLE).open(encoding="utf-8-sig", newline="") as f:
-                for row in csv.DictReader(f):
-                    ch = (row.get("字") or "").strip()
-                    if len(ch) == 1:
-                        table[ch] = ((row.get("声母") or "").strip(),
-                                     (row.get("韵母") or "").strip())
+            rows = _read(PINYIN_TABLE)       # 走数据源：CSV 或数据库，同一套键名
         except FileNotFoundError:
             # 表缺失时退化为「不认拼音」：纠错的中文精确匹配仍然可用，
             # 只是同音错字兜不住。宁可少一个能力，也不要直接抛错让服务起不来。
-            pass
+            rows = []
+        for row in rows:
+            ch = (row.get("字") or "").strip()
+            if len(ch) == 1:
+                table[ch] = ((row.get("声母") or "").strip(),
+                             (row.get("韵母") or "").strip())
         _PINYIN_TABLE_CACHE = table
     return _PINYIN_TABLE_CACHE
 
@@ -556,6 +596,13 @@ class Resolution:
 
 
 def _read(name: str) -> list:
+    """取一张词典表。name 是 CSV 文件名，同时也是数据源的 key。
+
+    数据库数据源必须在这里抛出 FileNotFoundError（表不存在/为空），
+    调用方的降级分支依赖这个异常类型。
+    """
+    if _SOURCE is not None:
+        return _SOURCE.read(name)
     path = DATA / name
     if not path.exists():
         raise FileNotFoundError(
@@ -727,6 +774,8 @@ class Corrector:
         except FileNotFoundError:
             pass                              # 词表可选，缺失时跳过这一层
         self.split_words |= self.vocab_norm   # 业务词也参与「组合词」判断
+        # 最长词长 —— 供「片段起点保护」扫描用（见 _resolve_spans）
+        self.split_max_len = max((len(w) for w in self.split_words), default=0)
         # 业务词里最长的字数 —— 供「词碎片保护区」扫描用（见 _vocab_spans）
         self.vocab_max_len = max((len(w) for w in self.vocab_norm), default=0)
 
@@ -1493,11 +1542,36 @@ class Corrector:
             found.append((s, end, frag))
 
         n = len(text)
+
+        # ---- 片段起点保护：不许从一个「已知词」的内部起头 ----
+        # 裸片段要靠滑窗试，可滑窗会从词的**中间**起切：
+        #   「全市整体情况」的切法是 全市｜整体｜情况，但滑窗会从 i=1 起切出
+        #   「市整体」「市整」——「市整」的读音恰好就是 shizheng，
+        #   与库里的台区「市政」同音，整句被改成「全市政台区体情况」。
+        # 这类碎片**不是用户说的名字，是切坏的**。判断它该放在切分层：
+        # 下游再怎么收严，也看不出「市整」是从「全市｜整体」中间切出来的。
+        # （同族的旧案：「结合｜意见」切出「结合意」→ 解河；
+        #   「平均停｜电时｜长」切出「电时」→ 电视台专变。）
+        inside_word = [False] * (n + 1)
+        if self.split_max_len >= 2:
+            for s in range(n):
+                if not HAN.match(text[s]):
+                    continue
+                for L in range(2, min(self.split_max_len, n - s) + 1):
+                    w = text[s:s + L]
+                    if w in self.split_words or normalize(w) in self.split_words:
+                        if _only_suffix(w):
+                            continue          # 纯类型词是名字的一部分，不算词边界
+                        for k in range(s + 1, s + L):
+                            inside_word[k] = True
+
         for i in range(n):
             # 起点可以是汉字，也可以是数字 —— 地名本身可能以数字开头（「9棵松」），
             # 只认汉字的话，「9颗松」整段都进不了滑窗，后面再准的判据也用不上。
             if not (HAN.match(text[i]) or text[i].isdigit()):
                 continue
+            if inside_word[i]:
+                continue              # 起点落在已知词内部 —— 切坏了，不是名字
             for L in range(min(6, n - i), 1, -1):
                 frag = text[i:i + L]
                 if not NAME_CHAR_RUN.fullmatch(frag):
@@ -1602,11 +1676,13 @@ class Corrector:
                       if self.area_core_code.get(nm, "").startswith(qc)]
         pool: list[str] = []
         seen: set[str] = set()
+        from_prefix: set[str] = set()          # 记来源，好把「匹配方式」报准
         for nm in prefix_all:
             if len(qc) / max(1, len(self.area_core_code.get(nm, ""))) * 100 < RESOLVE_PREFIX_MIN_COV:
                 continue                       # 地名只覆盖了候选核心的一小半，不算命中
             pool.append(nm)
             seen.add(nm)
+            from_prefix.add(nm)
         for sc, nm in self._area_candidates(frag):
             # 归一必须给唯一答案，相似度这条路要收严：
             # 0.78 会把「电力局」对到「电信局专变」(0.824)，属于明显误改。
@@ -1618,7 +1694,21 @@ class Corrector:
             # 用户问的是「结合意见工单…」，不是某个台区，结果被改成「解河见工单…」。
             # 所以再加一道「汉字至少重合一个字」的栅栏（按位对齐比）：
             # 「公家彭」vs「龚家棚」重合一个「家」—— 仍然放行，不影响真正的归一。
-            if not any(a == b for a, b in zip(core, self.area_core_str.get(nm, ""))):
+            ov = sum(1 for a, b in zip(core, self.area_core_str.get(nm, "")) if a == b)
+            if not ov:
+                continue
+            # 但「至少重合一个字」还不够 —— 相似度的分母是整串，**前两个音节同音**
+            # 就能把分数顶到 85 以上，尾巴完全不同也照样过：
+            #   「全市整体情况」滑出「市整体」(shizhengti)
+            #    vs「市政协」(shizhengxie) → 85.7，
+            #   公共块只有前缀 "shizheng"(8)，尾巴 ti / xie 毫不相干。
+            #   结果整句被改成「全市政协台区情况」。
+            # 这条路本来的适用前提是**用户只说了半截 / 库名中间多一两个字**
+            # （「公家棚3号台区」 vs 「龚家棚村3#台区40123」 —— 中间多个「村」），
+            # 那种情况下「查询码是候选码的前缀」或「汉字重合 ≥2」必然成立。
+            # 两条都不满足，就说明只是"听着像"，不是"同一个名字的简写"。
+            nc_code = self.area_core_code.get(nm, "")
+            if not (nc_code.startswith(qc) or ov >= 2):
                 continue
             if nm not in seen:
                 pool.append(nm)
@@ -1640,7 +1730,10 @@ class Corrector:
                 continue                       # 编号对不上：说了 3 号就不是 2#
             cov = round(len(qc) / max(1, len(self.area_core_code.get(nm, ""))) * 100, 1)
             cov = min(cov, 100.0)              # 前缀比查询还短时会算出 >100，封顶
-            cands.append((nm, "台区", cov, "核心词前缀", AREA_SUFFIX_RE.search(nm) is not None))
+            # 「匹配方式」必须报准 —— 上一版把相似度来的候选也一律写成「核心词前缀」，
+            # 排查时会照着错的方向去翻前缀逻辑。
+            how = "核心词前缀" if nm in from_prefix else "相似度"
+            cands.append((nm, "台区", cov, how, AREA_SUFFIX_RE.search(nm) is not None))
 
         # ---- 多候选台区 → 归到「地名层 + 台区」（不给某个具体台区）----
         # 位置很关键：要放在「候选为空就返回」**之前**。用户说「白鹤」时严格候选是空的
