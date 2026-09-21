@@ -9,8 +9,10 @@
 **不维护自己的口径表**：字典内容有缺，就报给维护方补行，代码不做补充。
 本模块只读，不写数据库。
 """
+import os
 import re
 import threading
+import time
 
 import config
 import tools_db
@@ -18,6 +20,9 @@ import tools_db
 _TICK = chr(96)
 _lock = threading.Lock()
 _cache = None
+# 提示词缓存（ai_prompt）：带 TTL，避免每个请求都查一次库（实测约 270ms/次）。
+# 提示词改动极少，TTL 到期自然刷新；运营改完最多 60 秒生效，不用重启服务。
+_PROMPTS = {'at': 0.0, 'data': None}
 
 _TABLE_REF = re.compile(r'\b(?:from|join)\s+([^\s;(),]+(?:\s*,\s*[^\s;(),]+)*)', re.I)
 _CTE = re.compile(r'\bwith\s+([A-Za-z0-9_]+)\s+as\s*\(|,\s*([A-Za-z0-9_]+)\s+as\s*\(', re.I)
@@ -110,11 +115,41 @@ def _ensure():
 def reload():
     global _cache
     _cache = None
+    _PROMPTS['data'] = None
     return _ensure()['tables']
 
 
-def prompts():
-    """他们在 ai_prompt 里维护的提示词，取最新版本（IS_new=1 且未删）。"""
+def warm():
+    """预热：建一次语义字典 + 填一次提示词缓存。
+
+    供服务启动时后台调用 —— `_ensure()` 首建要跑一批字典查询 + 逐表取 3 行样例，
+    实测约 4 秒；不预热的话「第一个提问的人」白等这 4 秒。
+    """
+    data = _ensure()
+    prompts(force=True)
+    return data['tables']
+
+
+def _prompts_ttl():
+    """提示词缓存秒数：环境变量 > .env > 默认 60；0 表示不缓存（每次查库）。"""
+    try:
+        return int(os.environ.get('SECRETARY_PROMPTS_TTL')
+                   or config.ENV.get('SECRETARY_PROMPTS_TTL') or '60')
+    except Exception:
+        return 60
+
+
+def prompts(force=False):
+    """他们在 ai_prompt 里维护的提示词，取最新版本（IS_new=1 且未删）。
+
+    带 TTL 缓存（默认 60s，见 SECRETARY_PROMPTS_TTL）：这个函数每个请求都要调，
+    查库约 270ms，而提示词改动极少 —— 没必要每次去查。
+    force=True 强制刷新（预热与 reload 用）。
+    """
+    ttl = _prompts_ttl()
+    now = time.time()
+    if not force and ttl > 0 and _PROMPTS['data'] is not None and now - _PROMPTS['at'] < ttl:
+        return _PROMPTS['data']
     out = {}
     try:
         for r in _rows('SELECT prompt_key AS k, prompt_content AS c FROM ai_data.ai_prompt '
@@ -122,7 +157,10 @@ def prompts():
             if r['k'] and (r['c'] or '').strip():
                 out[r['k']] = (r['c'] or '').strip()
     except Exception:
-        pass
+        # 查库失败别把提示词清空 —— 退回上一次成功的缓存（可能是几分钟前的）
+        return _PROMPTS['data'] or {}
+    _PROMPTS['data'] = out
+    _PROMPTS['at'] = now
     return out
 
 
