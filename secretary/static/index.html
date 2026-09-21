@@ -282,26 +282,6 @@ function runSkill(){
    .catch(function(e){document.getElementById('answer').textContent='请求失败：'+e;})
    .then(function(){b.disabled=false;b.textContent='触发这个技能';});
 }
-function loadTriggers(){
-  fetch('/api/triggers').then(function(r){return r.json();}).then(function(d){
-    var tt=d.trigger_types||{}, h='';
-    (d.skills||[]).forEach(function(s){
-      TRIGGERS[s.id]=s;
-      var t=tt[s.trigger]||{label:s.trigger};
-      h+='<div class="tmod"><div class="tmod-h"><b>'+esc(s.name)+'</b>'
-       +'<span class="ttag t-'+esc(s.trigger)+'">'+esc(t.label)+'</span>'
-       +'<span style="color:#9aa2ab;font-size:11.5px">'+esc(s.role||'')+'</span>'
-       +(s.has_doc?'<span style="color:#0f9d58;font-size:11.5px">已挂技能文档</span>':'<span style="color:#e08a00;font-size:11.5px">暂无技能文档</span>')
-       +'</div>';
-      (s.questions||[]).forEach(function(q,i){
-        h+='<button class="tq" data-sid="'+esc(s.id)+'" data-qi="'+i+'">'+esc(q.q)+'</button>';
-      });
-      if(s.note){h+='<div class="hint">'+esc(s.note)+'</div>';}
-      h+='</div>';
-    });
-    document.getElementById('triggers').innerHTML=h;
-  }).catch(function(){});
-}
 function fireTrigger(sid,qi){
   var s=TRIGGERS[sid]; if(!s)return;
   var q=(s.questions||[])[qi]; if(!q)return;
