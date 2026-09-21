@@ -59,7 +59,7 @@ def _system(doc_text=None):
     ])
 
 
-def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None, role='', scope=''):
+def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None, role='', scope='', use_doc=True):
     """触发一个技能：把它的整组问题 + 技能文档一起交给模型，一次跑完出一份结果。"""
     t0 = time.time()
     cfg = list_triggers()
@@ -70,7 +70,7 @@ def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None,
             break
     if not sk:
         return {'skill': str(skill_id), 'answer': '没有这个技能。', 'trace': [], 'tool_calls': 0}
-    doc = sk.get('doc_text') or ''
+    doc = (sk.get('doc_text') or '') if use_doc else ''
     qs = [str(x) for x in questions if str(x).strip()] if questions else [q.get('q') for q in (sk.get('questions') or [])]
     if not qs:
         return {'skill': sk.get('name'), 'answer': '这个技能没有勾选任何问题。', 'trace': [], 'tool_calls': 0}
@@ -89,7 +89,7 @@ def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None,
         user += '\n\n（本技能暂无技能文档，请按常识与已有提示词作答，并说明你依据了什么。）'
     answer, trace, blocked = _loop(_system(doc), user, model or agent.config.MODEL)
     calls = [t for t in trace if t.get('kind') == 'tool']
-    return {'skill': sk.get('name'), 'skill_id': skill_id, 'answer': answer, 'trace': trace,
+    return {'skill': sk.get('name'), 'skill_id': skill_id, 'answer': answer, 'trace': trace, 'use_doc': bool(use_doc),
             'questions': len(qs), 'doc': sk.get('doc'), 'doc_chars': len(doc), 'blocked': blocked,
             'tool_calls': len(calls), 'elapsed_ms': int((time.time() - t0) * 1000)}
 

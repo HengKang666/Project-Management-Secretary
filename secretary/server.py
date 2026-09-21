@@ -100,7 +100,8 @@ class H(BaseHTTPRequestHandler):
                                         work_name=data.get('work_name') or '',
                                         frm=data.get('from') or '', to=data.get('to') or '',
                                         questions=data.get('questions') or None,
-                                        role=data.get('role') or '', scope=data.get('scope') or '')
+                                        role=data.get('role') or '', scope=data.get('scope') or '',
+                                        use_doc=bool(data.get('use_doc', True)))
             except Exception as e:
                 r = {'answer': '服务异常：' + type(e).__name__ + ' ' + str(e)[:200], 'trace': [], 'tool_calls': 0}
             self._send(200, json.dumps(r, ensure_ascii=False, default=str), 'application/json')

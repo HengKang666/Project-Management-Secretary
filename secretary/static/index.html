@@ -35,6 +35,7 @@
 .t-scan{background:#7a5af8}.t-state{background:#c0392b}
 .tq{display:block;width:100%;text-align:left;margin:5px 0;padding:7px 10px;font-size:12.5px;background:#f7f9fc;color:#20242b;border:1px solid #e3e6ea;border-radius:6px;cursor:pointer;line-height:1.45}
 .tq:hover{background:#eaf2fc;border-color:#9cbfe8}
+.cmpout{border:1px solid #e6e8eb;border-radius:8px;padding:10px;font-size:12.5px;line-height:1.65;background:#fff;white-space:pre-wrap;max-height:520px;overflow:auto}
 #report{line-height:1.75;font-size:14.5px}
  #report h3{font-size:15px;margin:16px 0 8px;padding-left:8px;border-left:3px solid #1a6fd4}
  #report h4{font-size:14px;margin:12px 0 6px}
@@ -66,6 +67,13 @@
         <select id="scopeSel" title="数据范围（层级）" style="flex:1"></select>
       </div>
       <div id="skillPanel" style="margin-top:10px"></div>
+      <div class="bar" style="margin-top:8px">
+        <button onclick="runCompare()" style="background:#0f9d58">并排对比触发（同时跑两边）</button>
+      </div>
+      <div class="tgrid" style="margin-top:8px">
+        <div><p class="lbl">① 只问问题（不带技能文档）</p><div id="cmpA" class="cmpout">（未触发）</div></div>
+        <div><p class="lbl">② 触发技能（带技能文档）</p><div id="cmpB" class="cmpout">（未触发）</div></div>
+      </div>
     </div>
     <div class="card" style="margin-bottom:12px">
       <p class="lbl">年度缺陷治理计划分析 —— 模拟收到一份「预算分配通知」（本期数字是模拟的，可以直接改；换供电所会重新生成）</p>
@@ -239,6 +247,10 @@ function showSkill(){
      +'</div>';
   });
   h+='<div class="hint">想换问题就直接改上面的文本框；预设只是默认值。</div>';
+  if(k.has_doc){
+    h+='<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;color:#1a6fd4">查看这个技能的文档（'+k.doc_text.length+' 字）—— 它才是决定「怎么答」的固定流程</summary>'
+     +'<pre style="max-height:280px;font-size:11.5px;background:#fafbfc;border:1px solid #eef0f2;border-radius:6px;padding:8px;margin-top:6px;white-space:pre-wrap">'+esc(k.doc_text)+'</pre></details>';
+  }
   if(k.trigger==='state'){
     h+='<div style="margin-top:8px;font-size:12.5px;color:#7b838d">状态变更规则（选工单 + 选规则，点触发即按规则拼问题并提醒对应角色）：</div>';
     h+='<div class="bar" style="flex-wrap:wrap;margin-top:6px"><select id="scOrder" style="flex:2;min-width:240px"></select><select id="scRule" style="flex:1;min-width:200px"></select></div>';
@@ -251,6 +263,30 @@ function showSkill(){
     var sr=document.getElementById('scRule'); sr.innerHTML='';
     TRULES.forEach(function(r,i){var op=document.createElement('option');op.value=String(i);op.textContent=r.from+' → '+r.to+'（提醒 '+r.role+'）';sr.appendChild(op);});
   }
+}
+function collectQs(){
+  var out=[]; var all=document.querySelectorAll('.sq'), chk=document.querySelectorAll('.sqc');
+  Array.prototype.forEach.call(all, function(el,i){ if(chk[i] && chk[i].checked && el.value.trim()){ out.push(el.value.trim()); } });
+  return out;
+}
+function runCompare(){
+  var k=TSEL; if(!k)return;
+  var qs=collectQs();
+  if(!qs.length){ document.getElementById('cmpA').textContent='至少勾一条问题。'; return; }
+  var base={skill_id:k.id,questions:qs,
+    role:(document.getElementById('roleSel')||{value:''}).value,
+    scope:(document.getElementById('scopeSel')||{value:''}).value,
+    model:document.getElementById('model').value};
+  function go(el,useDoc){
+    document.getElementById(el).textContent='跑中…（两边同时跑）';
+    return fetch('/api/skill/run',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(Object.assign({},base,{use_doc:useDoc}))})
+      .then(function(r){return r.json();})
+      .then(function(d){document.getElementById(el).textContent=(d.answer||'（空）')+String.fromCharCode(10)+String.fromCharCode(10)+'[工具 '+(d.tool_calls||0)+' 次 / '+((d.elapsed_ms||0)/1000).toFixed(1)+' 秒 / 技能文档 '+(d.doc_chars||0)+' 字]';})
+      .catch(function(e){document.getElementById(el).textContent='失败：'+e;});
+  }
+  go('cmpA', false);
+  go('cmpB', true);
 }
 function runSkill(){
   var k=TSEL; if(!k)return;
