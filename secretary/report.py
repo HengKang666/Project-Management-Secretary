@@ -59,7 +59,7 @@ def _system(doc_text=None):
     ])
 
 
-def run_skill(skill_id, model=None, work_name='', frm='', to=''):
+def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None):
     """触发一个技能：把它的整组问题 + 技能文档一起交给模型，一次跑完出一份结果。"""
     t0 = time.time()
     cfg = list_triggers()
@@ -71,7 +71,9 @@ def run_skill(skill_id, model=None, work_name='', frm='', to=''):
     if not sk:
         return {'skill': str(skill_id), 'answer': '没有这个技能。', 'trace': [], 'tool_calls': 0}
     doc = sk.get('doc_text') or ''
-    qs = [q.get('q') for q in (sk.get('questions') or [])]
+    qs = [str(x) for x in questions if str(x).strip()] if questions else [q.get('q') for q in (sk.get('questions') or [])]
+    if not qs:
+        return {'skill': sk.get('name'), 'answer': '这个技能没有勾选任何问题。', 'trace': [], 'tool_calls': 0}
     head = '你的角色：%s。\n' % (sk.get('role') or '')
     if work_name:
         head += ('刚刚发生了一次状态变更：工单「%s」从「%s」变为「%s」。请结合这次变更来答。\n' % (work_name, frm, to))
