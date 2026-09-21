@@ -57,6 +57,10 @@ def _system(doc_text=None):
         rules = ''
     if rules:
         skill = skill + '\n\n【判据规则（判断标准的唯一出处，必须按它判断）】\n' + rules
+    try:
+        menu = semantic.table_menu()
+    except Exception:
+        menu = ''
     bar = '=' * 40
     return '\n\n'.join([
         BASE_SYSTEM,
