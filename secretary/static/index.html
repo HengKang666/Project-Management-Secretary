@@ -61,6 +61,10 @@
         <select id="skillSel" onchange="showSkill()" style="flex:1"></select>
         <button id="skillGo" onclick="runSkill()">触发这个技能</button>
       </div>
+      <div class="bar" style="margin-top:6px">
+        <select id="roleSel" title="以谁的身份触发"></select>
+        <select id="scopeSel" title="数据范围（层级）" style="flex:1"></select>
+      </div>
       <div id="skillPanel" style="margin-top:10px"></div>
     </div>
     <div class="card" style="margin-bottom:12px">
@@ -215,6 +219,8 @@ function loadTriggers(){
     TT=d.trigger_types||{};
     var s=document.getElementById('skillSel'); s.innerHTML='';
     (d.skills||[]).forEach(function(k){TRIGGERS[k.id]=k;var o=document.createElement('option');o.value=k.id;o.textContent=k.name+'（'+((TT[k.trigger]||{}).label||'')+'）';s.appendChild(o);});
+    var rs=document.getElementById('roleSel'); (d.roles||[]).forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent='身份：'+x;rs.appendChild(o);});
+    var ss=document.getElementById('scopeSel'); (d.scopes||[]).forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent='范围：'+x;ss.appendChild(o);});
     fetch('/api/statechange').then(function(r){return r.json();}).then(function(x){TRULES=x.rules||[];TORDERS=x.orders||[];showSkill();}).catch(function(){showSkill();});
   }).catch(function(){});
 }
@@ -255,7 +261,9 @@ function runSkill(){
   var qs=[]; var all=document.querySelectorAll('.sq'), chk=document.querySelectorAll('.sqc');
   Array.prototype.forEach.call(all, function(el,i){ if(chk[i] && chk[i].checked && el.value.trim()){ qs.push(el.value.trim()); } });
   if(!qs.length){ b.disabled=false; b.textContent='触发这个技能'; document.getElementById('answer').textContent='至少勾一条问题。'; return; }
-  var body={skill_id:k.id,model:document.getElementById('model').value,questions:qs};
+  var body={skill_id:k.id,model:document.getElementById('model').value,questions:qs,
+        role:(document.getElementById('roleSel')||{value:''}).value,
+        scope:(document.getElementById('scopeSel')||{value:''}).value};
   if(k.trigger==='state'){
     var o=TORDERS[parseInt((document.getElementById('scOrder')||{value:'0'}).value,10)]||{};
     var r=TRULES[parseInt((document.getElementById('scRule')||{value:'0'}).value,10)]||{};
