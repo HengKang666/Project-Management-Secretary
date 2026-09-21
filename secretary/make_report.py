@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 
+import pathlib
 import json, io, sys, pathlib
 from collections import Counter
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-OUT = pathlib.Path(__file__).resolve().parent.parent / 'output'
+OUT = pathlib.Path(pathlib.Path(__file__).resolve().parents[1] / 'output')
 rows = json.load(open(OUT / 'regression_v3.json', encoding='utf-8'))
 old = json.load(open(OUT / 'e2e_v1.json', encoding='utf-8'))
 n = len(rows)

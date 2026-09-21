@@ -172,10 +172,12 @@ def table_menu():
             for c in cs.values():
                 nm = c['column_name'] + (c['column_cn_name'] or '')
                 d = (c['business_desc'] or '').strip()
+                # 字段说明按原文给足。原先截 40 字，把关键约束截掉了：
+                # scope_key 的「station 是哈希，按名称筛选请用 scope_name」正好在第 41 字之后，
+                # 模型只看到「district 为县公司名；stat…」→ 直接拿所名去等值匹配 scope_key。
+                # 全库仅 30 个字段超过 40 字，放开后字典只增约 1K 字，不构成负担。
                 if d and d != (c['column_cn_name'] or '').strip() and len(d) >= 6:
-                    # 不截断：实测全文只比 [:40] 多 1054 字符（+6%），但截断会把「按名称筛选请用
-                    # scope_name」这类关键提醒砍掉，模型只看表级说明就会把所名填进 scope_key。
-                    nm += '：' + d
+                    nm += '：' + d[:300]
                 ev = (data['samples'].get(t['table_name']) or {}).get(c['column_name'])
                 if ev:
                     nm += '（例:' + ev[:30] + '）'

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """模型自主循环：只给工具与底线，不给流程。
 
-分工：上游「信息补全」工作流负责机构名自动纠错与统计时间（本服务先调它、取出参）；
-**问题补全由本服务负责** —— 用知识库里的补全规则与术语词典，把口语问法补成标准问题，再查口径、取数、作答。
+分工：**信息补全由本服务自己做**（字面纠错与名称归一 → 时间与地点补全），
+问题补全走知识库的补全规则，再查口径、取数、作答。
+上游那个补全应用已不在链路里，时间与地点同样由本服务补（见 time_scope.py）。
 全部在一个模型循环里由模型自己排顺序，代码不写业务流程。
 """
 import concurrent.futures
@@ -14,8 +15,9 @@ import urllib.request
 
 import config
 import gaps
+import name_fix
 import semantic
-import tools_app
+import time_scope
 import tools_db
 import tools_kb
 
@@ -100,12 +102,25 @@ COMPLETE_SYSTEM = (
     '   - 补全**不能改变问题的类型**：用户问的是某个具体指标或数量（如「台区线损率是多少」「低电压台区有多少个」），'
     '就不能套用「整体情况 / 台区情况说明」这类规则；反过来，用户问整体情况，也不要补成单个指标。\n'
     '   有对应规则 → 按它补全；没有对应规则 → **原样输出用户问题**，不要编造补全内容。\n'
-    '4. 时间与范围已由上游补全确定，直接采用，不要反问。'
+    '4. **时间与地点不要自己定** —— 它们已经由前面的步骤算好了，就在下面给的【统计范围】里，'
+    '直接照抄到补全后的问题里即可。\n'
+    '   - **绝对不要**在问题缺时间/地点时自己补「今年」「今年至今」「全市」这类默认值：'
+    '多轮会话里，缺的部分可能该**沿用上一轮**（上一轮问的是「环潭供电所」，这一轮只说'
+    '「那售电量呢」，地点就该是环潭供电所而不是全市）。自己补默认值会和【统计范围】打架。\n'
+    '   - 也不要自己推算日期（「上月」是几月）——【统计范围】里已经是具体年月。\n'
+    '   - 补完的问题里，时间与地点都要按【统计范围】写全。'
 )
 
 
-def complete_question(question, model=None):
-    """本服务自己的问题补全：检索补全规则库，让模型按规则改写。只看规则库与问题，不带用户画像。"""
+def complete_question(question, model=None, scope_text=None, prev_question=None):
+    """本服务自己的问题补全：检索补全规则库，让模型按规则改写。
+
+    **必须把已定好的统计范围传进来**（scope_text）：
+    补全的产出会作为【补全参考】交给主循环，若它自己另补一套时间/地点，
+    就会与【统计范围】冲突 —— 多轮里表现为「说了沿用上一轮，模型却按全市答」。
+
+    prev_question = 上一轮的问题，用于理解省略了主语的问法（「那售电量呢」）。
+    """
     model = model or config.MODEL
     t0 = time.time()
     nodes = []
@@ -115,8 +130,13 @@ def complete_question(question, model=None):
     except Exception:
         nodes = []
     ref = '\n\n'.join('【%s】%s' % (n.get('title') or '', n.get('content') or '') for n in nodes)
-    ask_text = ('补全规则库切片：\n' + (ref or '（没检索到，按通用规则补全）') +
-                '\n\n用户问题：' + question + '\n\n请输出补全后的问题。')
+    ask_text = '补全规则库切片：\n' + (ref or '（没检索到，按通用规则补全）') + '\n'
+    if prev_question:
+        ask_text += ('\n上一轮用户问的是：' + prev_question +
+                     '\n（本轮可能省略了主语或指标，请结合上一轮理解它到底在问什么）\n')
+    if scope_text:
+        ask_text += '\n【统计范围】（时间与地点已确定，补全时直接采用，不要改成别的）\n' + scope_text + '\n'
+    ask_text += '\n用户问题：' + question + '\n\n请输出补全后的问题。'
     msgs = [{'role': 'system', 'content': COMPLETE_SYSTEM},
             {'role': 'user', 'content': ask_text}]
     out = ''
@@ -135,7 +155,7 @@ def complete_question(question, model=None):
 _FALLBACK = '你是随州供电公司的项目管理秘书，负责回答业务问题。'
 
 
-def _system(skills=None):
+def _system():
     """系统提示 = 他们在 ai_prompt 里维护的提示词（config.PROMPTS 指定的 key）
     + 业务字典的表目录。**提示词不在代码里写死**。
     """
@@ -148,8 +168,6 @@ def _system(skills=None):
     except Exception:
         pass
     head = '\n\n'.join(parts).strip() or _FALLBACK
-    if skills and skills.strip():
-        head += ('\n\n【本轮技能文档：用户配置的作答规范，必须严格按它来查数与组织回答】\n' + skills.strip())
     try:
         return head + '\n\n【可用数据表（只能查这些，字典外的表一律不可用）】\n' + semantic.table_menu()
     except Exception:
@@ -178,50 +196,127 @@ def _exec_calls(calls):
         return list(ex.map(_one_call, calls))
 
 
-def ask(question, model=None, max_steps=None, profile=None, skills=None):
-    """question = 上游信息补全后的问题（时间与地点已明确）。
+def ask(question, model=None, max_steps=None, profile=None,
+        session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
+        history_turns=None):
+    """question = 用户的原话（不需要上游预处理）。
+
+    本服务依次做：**载入多轮上下文** → 字面纠错与名称归一 → 时间与地点补全 →
+    问题补全 → 模型循环查数作答 → 落库（问答/会话/消息/执行明细写进 agent_data）。
 
     profile = 用户画像（可选）：补全阶段不使用；与补全后的问题一起交给模型拆解任务。
+
+    session_id / user_id / user_code / client_ip / channel = 记录用（可选）：
+      - session_id 不传则服务端生成一个（UUID），无论落库成败都会回在返回值里
+      - user_code 传业务用户ID（如 t_user.uid），落库时换成内部主键
+      - **落库失败绝不影响问答** —— 只打日志
+
+    多轮上下文：
+      - 传了 session_id 就会自动读同一场会话最近的 N 轮（N = history_turns
+        或 config.HISTORY_TURNS），既交给模型当上下文，也用于「本轮没说时间/地点时沿用上一轮」
+      - history_turns=0 可单次关掉上下文；SECRETARY_HISTORY_TURNS=0 全局关掉
     """
     model = model or config.MODEL
     max_steps = max_steps or config.MAX_STEPS
     t_all = time.time()
     trace = []
-    # 第一步：上游「信息补全」工作流（机构名自动纠错 + 统计时间）。失败不影响后续，只是少一层参考。
-    t_up = time.time()
-    try:
-        up = tools_app.complete_question(question)
-    except Exception as e:
-        up = {'text': '', 'error': type(e).__name__ + ': ' + str(e)[:200]}
-    up_text = (up.get('text') or '').strip()
-    up_ms = int((time.time() - t_up) * 1000)
-    trace.append({'seq': 1, 'kind': 'upstream', 'tool': 'info_completion',
-                  'ms': up_ms, 'args': {'input': question},
-                  'result': {'completed': up_text, 'error': up.get('error'),
-                             'request_id': up.get('request_id'), 'cached': up.get('cached')}})
-    done = complete_question(question, model)
+    raw_question = question
+    # ⓪ 字面纠错 + 名称归一（阶段①的「字面」部分，在问题补全之前）。
+    #    必须先做：字没改对，后面检索知识库、补全、写 SQL 全是白费。
+    t_fix = time.time()
+    fixed = name_fix.fix(question)
+    if fixed['used']:
+        question = fixed['text']
+        trace.append({'seq': len(trace) + 1, 'kind': 'namefix', 'tool': 'name_fix',
+                      'ms': fixed['ms'],
+                      'args': {'input': raw_question},
+                      'result': {'fixed': fixed['text'],
+                                 'word_fixes': fixed['word_fixes'],
+                                 'name_fixes': fixed['name_fixes'],
+                                 'names': fixed['names'],
+                                 'areas': fixed['areas'],
+                                 'unresolved': fixed.get('unresolved', []),
+                                 'hint': fixed['hint']}})
+    namefix_ms = int((time.time() - t_fix) * 1000)
+    # ⓪·4 载入多轮上下文（同一场会话最近的几轮问答）。
+    #      **必须放在时间地点补全之前** —— 本轮没提时间/地点时要沿用上一轮的口径。
+    #      载入失败按「无上下文」处理，绝不影响本轮问答。
+    turns = config.HISTORY_TURNS if history_turns is None else max(0, int(history_turns))
+    history = []
+    if turns and session_id:
+        try:
+            import qa_log
+            history = qa_log.load_context(session_id, limit=turns)
+        except Exception as e:                      # noqa: BLE001
+            print('[agent] 读取多轮上下文失败（按无上下文继续）：%s: %s'
+                  % (type(e).__name__, e), flush=True)
+    prev_scope = None
+    if history:
+        last = history[-1]
+        prev_scope = {'period_type': last.get('period_type'),
+                      'period_key': last.get('period_key'),
+                      'time_text': last.get('time_text'),
+                      'place': last.get('place')}
+    # ⓪·5 时间与范围补全：相对时间词换成具体期间；没说的优先沿用上一轮，再没有才补默认值。
+    #       这种换算是确定性的（「上月」是几月取决于今天），交给代码，不留给模型去猜日期。
+    t_scope = time.time()
+    scope = time_scope.describe(question, fixed, prev=prev_scope)
+    if scope['question'] and scope['question'] != question:
+        question = scope['question']
+    trace.append({'seq': len(trace) + 1, 'kind': 'scope', 'tool': 'time_scope',
+                  'ms': int((time.time() - t_scope) * 1000),
+                  'result': {'matched': scope['time']['matched'],
+                             'time': scope['time']['time_text'],
+                             'period_type': scope['time']['period_type'],
+                             'period_key': scope['time']['period_key'],
+                             'time_is_default': scope['time']['is_default'],
+                             'place': scope['place'],
+                             'place_is_default': scope['place_default'],
+                             'history_turns': len(history),
+                             'time_inherited': scope['inherited']['time'],
+                             'place_inherited': scope['inherited']['place'],
+                             'hint': scope['time']['note']}})
+    done = complete_question(question, model,
+                             scope_text=scope['scope_text'],
+                             prev_question=(history[-1].get('raw_question') if history else None))
     completed = done['completed']
     # 判断（我们这边唯一的职责）：补全有没有产出与原文不同的内容 —— 相同就视为“没找到对应规则、不采用”
     used = bool(completed and completed.strip() and completed.strip() != question.strip())
-    trace.append({'seq': 2, 'kind': 'complete', 'tool': 'question_completion',
+    trace.append({'seq': len(trace) + 1, 'kind': 'complete', 'tool': 'question_completion',
                   'ms': done['ms'], 'args': {'input': question, 'rules': done['rules']},
                   'result': {'completed': completed, 'ok': done['ok'], 'used': used,
                              'reason': '按规则库补全' if used else '规则库没有对应问法，不采用补全'}})
     t_loop = time.time()
     # 问题为准；补全结果只作参考，由模型自己判断适不适用
-    user_content = '原始问题：' + question
-    if up_text:
-        user_content += ('\n\n【上游信息补全】上游「信息补全」工作流的出参：里面的机构名、地点名已按标准名'
-                         '纠正（例如把不存在的名称改成库里真实存在的名称），统计时间也已确定，'
-                         '查库时请直接采用其中的机构名与时间范围；如果它改写了问题的指标或问法，以原始问题为准。\n'
-                         + up_text)
+    user_content = question
+    if history:
+        hl = []
+        for i, h in enumerate(history, 1):
+            hl.append('%d) 用户：%s' % (i, h.get('raw_question') or ''))
+            hl.append('   系统：%s' % (h.get('answer') or '').replace('\n', ' '))
+            hl.append('   当时口径：%s / %s' % (h.get('time_text') or '-', h.get('place') or '-'))
+        user_content += (
+            '\n\n【对话历史】（同一场会话最近的 %d 轮，**只用来判断本轮问题在问什么、省略了什么**）\n%s\n'
+            '注意三点：① 历史里的数字是按**当时的口径**算出来的，不能当成本轮答案；'
+            '本轮必须按下面【统计范围】重新查数。'
+            '② 本轮的统计口径已在上面的【统计范围】里定好，**不要**因为历史而改变它。'
+            '③ 不要在回答里复述或提及这段历史。' % (len(history), '\n'.join(hl)))
+    # 统计范围必须明确交给模型：六项指标是按「范围 + 期间」预计算的，
+    # 不给这一句，它就得自己猜该取 month 还是 yearToDate、该取哪个月。
+    user_content += ('\n\n【统计范围】（已按今天日期算好，直接采用，不要自行推算日期）\n'
+                     + scope['scope_text'])
+    if fixed['hint']:
+        # 名称被归到「地名层」时（库里没有这个精确名），必须告诉模型用前缀查，
+        # 否则它很可能拿合成名做等值匹配，一条都查不到还以为是空数据。
+        user_content += ('\n\n【名称归一说明】' + fixed['hint'])
     if used:
         user_content += ('\n\n【补全参考】按知识库的补全规则库，这个问法通常应补成下面这样。'
-                         '它只是参考：如果与上面的问题不符，或它提到的指标/范围在当前数据里查不到，'
-                         '以问题为准，忽略不适用的部分。\n' + completed)
+                         '它**只是参考**：如果与上面【统计范围】里的时间或地点不一致，'
+                         '**一律以【统计范围】为准**；如果它提到的指标在当前数据里查不到，'
+                         '也以问题为准，忽略不适用的部分。\n' + completed)
     if profile:
         user_content += ('\n\n用户画像（用于判断统计范围与关注重点，不要因此增减问题里已经要求的必答项）：\n' + profile)
-    messages = [{'role': 'system', 'content': _system(skills)}, {'role': 'user', 'content': user_content}]
+    messages = [{'role': 'system', 'content': _system()}, {'role': 'user', 'content': user_content}]
     answer = ''
     nudged = False
     blocked = False
@@ -284,11 +379,21 @@ def ask(question, model=None, max_steps=None, profile=None, skills=None):
     sql_calls = [t for t in trace if t.get('tool') == 'run_sql']
     kb_calls = [t for t in trace if t.get('tool') == 'kb_search']
     result = {
-        'input_question': question,
-        'upstream_text': up_text,
-        'upstream_error': up.get('error'),
+        'input_question': raw_question,
+        'fixed_question': question,
+        'name_fix_used': fixed['used'],
+        'scope': {
+            'time': scope['time']['time_text'],
+            'period_type': scope['time']['period_type'],
+            'period_key': scope['time']['period_key'],
+            'time_is_default': scope['time']['is_default'],
+            'place': scope['place'],
+            'place_is_default': scope['place_default'],
+            # 这两个为 true 说明该值**不是用户这轮说的**，而是从上一轮沿用来的
+            'time_inherited': scope['inherited']['time'],
+            'place_inherited': scope['inherited']['place'],
+        },
         'user_profile': profile or '',
-        'skills_chars': len((skills or '').strip()),
         'completion_used': used,
         'completed_question': completed,
         'answer': answer,
@@ -296,7 +401,7 @@ def ask(question, model=None, max_steps=None, profile=None, skills=None):
         'model': model,
         'elapsed_ms': int((time.time() - t_all) * 1000),
         'timings': {
-            'upstream_ms': up_ms,
+            'namefix_ms': namefix_ms,
             'completion_ms': done['ms'],
             'loop_ms': int((time.time() - t_loop) * 1000),
             'total_ms': int((time.time() - t_all) * 1000),
@@ -307,6 +412,7 @@ def ask(question, model=None, max_steps=None, profile=None, skills=None):
         'no_db_query': len(db_calls) == 0,
         'unverified': blocked,
         'steps': len(trace),
+        'history_used': len(history),
     }
     try:
         if gaps.is_gap(answer, blocked):
@@ -316,4 +422,17 @@ def ask(question, model=None, max_steps=None, profile=None, skills=None):
             result['recorded_as_gap'] = True
     except Exception:
         pass
+    # 落库：问答/会话/消息/执行明细写进 agent_data 库。
+    # **这一段的任何异常都必须吞掉** —— 记录是附属能力，不能因为它把回答搞丢。
+    try:
+        import qa_log
+        rec = qa_log.save(result, session_id=session_id, user_id=user_id, user_code=user_code,
+                          client_ip=client_ip, channel=channel)
+        result['session_id'] = rec['session_id']
+        result['qa_id'] = rec['qa_id']
+    except Exception as e:                          # noqa: BLE001
+        result['session_id'] = session_id
+        result['qa_id'] = None
+        # flush：不加的话日志重定向到文件时会被缓冲，等于没有输出
+        print('[qa_log] 落库失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
     return result

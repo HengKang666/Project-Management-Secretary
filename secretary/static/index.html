@@ -27,24 +27,7 @@
  .ms{float:right;color:#9aa2ab;font-size:12px}
  pre{margin:0;padding:10px;font-size:12px;overflow:auto;max-height:300px;background:#fff;border-top:1px solid #eef0f2;white-space:pre-wrap;word-break:break-all}
  .hint{font-size:12px;color:#9aa2ab;margin-top:8px}
- .tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
-.tmod{border:1px solid #e6e8eb;border-radius:8px;padding:10px;background:#fff}
-.tmod-h{font-size:13.5px;margin-bottom:6px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-.ttag{font-size:11px;color:#fff;border-radius:3px;padding:1px 7px;white-space:nowrap}
-.t-manual{background:#1a6fd4}.t-form{background:#0f9d58}.t-precheck{background:#e08a00}
-.t-scan{background:#7a5af8}.t-state{background:#c0392b}
-.tq{display:block;width:100%;text-align:left;margin:5px 0;padding:7px 10px;font-size:12.5px;background:#f7f9fc;color:#20242b;border:1px solid #e3e6ea;border-radius:6px;cursor:pointer;line-height:1.45}
-.tq:hover{background:#eaf2fc;border-color:#9cbfe8}
-.tihint{background:#f0f7ff;border-left:3px solid #1a6fd4;border-radius:4px;padding:6px 9px;font-size:12px;color:#3c5878;margin:6px 0;line-height:1.55}
-.qbox{margin-top:8px;border-top:1px dashed #e6e8eb;padding-top:7px}
-.qbox summary{cursor:pointer;font-size:12.5px;color:#1a6fd4}
-.tgrp{border:1px solid #e6e8eb;border-radius:8px;padding:8px 10px;margin:7px 0;background:#fcfdfe}
-.tgrp-h{font-size:12px;color:#1a6fd4;font-weight:600;margin-bottom:5px}
-.trow{display:flex;gap:8px;align-items:center;margin:4px 0}
-.tlb{min-width:150px;font-size:12.5px;color:#5b6470}
-.trow input{flex:1;padding:6px 9px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px}
-.cmpout{border:1px solid #e6e8eb;border-radius:8px;padding:10px;font-size:12.5px;line-height:1.65;background:#fff;white-space:pre-wrap;max-height:520px;overflow:auto}
-#report{line-height:1.75;font-size:14.5px}
+ #report{line-height:1.75;font-size:14.5px}
  #report h3{font-size:15px;margin:16px 0 8px;padding-left:8px;border-left:3px solid #1a6fd4}
  #report h4{font-size:14px;margin:12px 0 6px}
  #report ul,#report ol{margin:6px 0 10px;padding-left:22px}
@@ -66,9 +49,6 @@
 <div class="wrap">
   <div>
     <div class="card" style="margin-bottom:12px">
-      <p class="lbl">这一页是「随口一问」的问答页。要按技能触发（带上游数据、身份范围、技能文档），去 <a href="/skills" style="color:#1a6fd4">技能触发台</a>。</p>
-    </div>
-    <div class="card" style="margin-bottom:12px">
       <p class="lbl">年度缺陷治理计划分析 —— 模拟收到一份「预算分配通知」（本期数字是模拟的，可以直接改；换供电所会重新生成）</p>
       <div class="bar" style="flex-wrap:wrap">
         <select id="rstation" title="供电所" onchange="loadNotice()"></select>
@@ -79,18 +59,14 @@
       <div id="rmetrics" style="margin-top:10px"></div>
     </div>
     <div class="bar">
-      <input id="q" placeholder="输入上游信息补全后的问题（时间、地点已明确），例如：截至2026年9月，全市的预算总额是多少？" />
+      <input id="q" placeholder="直接说人话就行（错字、简称、漏写时间地点都能听懂），例如：环潭供电所上个月的线损率" />
       <button id="go" onclick="ask()">提问</button>
+      <button id="newchat" onclick="newSession()" style="background:#f4f5f7;color:#3b4653;border:1px solid #e3e6ea">新会话</button>
     </div>
+    <div id="sessbar" style="margin-top:7px;font-size:12px;color:#8a95a1"></div>
     <div style="margin-top:10px">
-      <textarea id="profile" rows="2" placeholder="用户画像（可选，辅助问题补全）：例如 我是市公司运检部专责，只看全市和随县，重点看线损与工单"
+      <textarea id="profile" rows="2" placeholder="用户画像（可选）：例如 我是市公司运检部专责，只看全市和随县，重点看线损与工单"
         style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #e3e6ea;border-radius:8px;font-family:inherit;font-size:13px;resize:vertical"></textarea>
-    </div>
-    <div style="margin-top:10px">
-      <select id="skillpick" onchange="pickSkill()" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #e3e6ea;border-radius:8px;font-size:13px"></select>
-      <textarea id="skills" rows="3" placeholder="技能配置（可选，和用户画像一样随时可改）：粘一份「该怎么答」的规范进来，模型会按它来查数与作答。也可以从上面的下拉框选一份 skills/ 里的文档载入。"
-        style="width:100%;box-sizing:border-box;margin-top:6px;padding:9px 11px;border:1px solid #e3e6ea;border-radius:8px;font-family:inherit;font-size:13px;resize:vertical"></textarea>
-      <div class="hint" id="skillnote"></div>
     </div>
     <div class="card" style="margin-top:14px">
       <p class="lbl">回答</p>
@@ -99,7 +75,8 @@
       <div id="report"></div>
       <div id="meta"></div>
     </div>
-    <div class="hint">时间与地点由上游信息补全提供；问题补全、查口径、取数、作答都由模型自己排顺序。本页不预设任何业务规则。</div>
+    <div class="hint">同一场会话里会记住上一轮：这一轮没说时间、地点时会沿用上一轮（例如问完「环潭供电所上个月的线损率」，再说「那售电量呢」）。
+      点「新会话」即从零开始。时间与地点由代码按今天日期算好，问题补全、查口径、取数、作答由模型自己排顺序。</div>
   </div>
   <div class="card">
     <p class="lbl">处理过程（工具调用轨迹）</p>
@@ -133,7 +110,32 @@ document.getElementById('model').addEventListener('change',function(){
   document.getElementById('modelnote').textContent=MODELNOTE[this.value]||'';
 });
 loadModels();
+setSession(getSession());
 function tagCls(t){return t==='kb_search'?'t-kb':(t==='run_sql'?'t-db':(t==='answer'?'t-ans':'t-meta'));}
+
+/* ---------------- 会话（多轮记忆） ----------------
+   服务端靠 session_id 记住同一场会话，并把它作为上下文交给模型。
+   页面把它存在 localStorage：刷新浏览器也不丢；点「新会话」才重新开始。 */
+function getSession(){
+  var s=null;
+  try{s=localStorage.getItem('secretary_session');}catch(e){}
+  return s||'';
+}
+function setSession(s){
+  try{localStorage.setItem('secretary_session',s||'');}catch(e){}
+  var el=document.getElementById('sessbar');
+  if(el){el.textContent=s?('当前会话：'+s+'（同一场会话里，本轮没说的时间和地点会沿用上一轮）'):'未开始会话，下次提问会自动新建一场';}
+}
+function newSession(){
+  setSession('');
+  document.getElementById('answer').textContent='';
+  document.getElementById('completed').textContent='';
+  document.getElementById('meta').textContent='';
+  document.getElementById('trace').innerHTML='';
+  document.getElementById('q').value='';
+  document.getElementById('q').focus();
+}
+
 function ask(){
   var q=document.getElementById('q').value.trim();
   if(!q)return;
@@ -146,19 +148,27 @@ function ask(){
   var model=document.getElementById('model').value;
   var profile=document.getElementById('profile').value.trim();
   try{localStorage.setItem('secretary_profile',profile);}catch(e){}
-  try{localStorage.setItem('secretary_skills',document.getElementById('skills').value);}catch(e){}
   fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({question:q,model:model,profile:profile,skills:document.getElementById('skills').value})})
+        body:JSON.stringify({question:q,model:model,profile:profile,
+                             session_id:getSession()||undefined,uid:'PROV-FIN-001'})})
    .then(function(r){return r.json();})
    .then(function(d){
+     if(d.session_id)setSession(d.session_id);      /* 首问服务端会生成并回传 */
      document.getElementById('completed').textContent=(d.user_profile?('用户画像：'+d.user_profile+String.fromCharCode(10)):'')+(d.completed_question?('补全参考（仅参考，以问题为准）：'+d.completed_question):'');
       document.getElementById('answer').textContent=d.answer||'（空）';
      var w=d.no_db_query?'<span class="warn">本次未查询数据库</span>':'';
      var tm=d.timings||{};
      var gap=d.recorded_as_gap?'<span class="warn" style="background:#ffe8e6;color:#a12a20">已记入缺口清单</span>':'';
+     /* 口径：把「本轮说的」和「沿用上一轮的」区分开，避免以为是说错了 */
+     var sc=d.scope||{}, scTxt='';
+     if(sc.time){
+       scTxt='<span class="warn" style="background:#eef4ff;color:#2d5bb9">口径：'+esc(sc.time)+' / '+esc(sc.place||'')
+            +((sc.time_inherited||sc.place_inherited)?'（沿用上一轮）':'')+'</span>';
+     }
      document.getElementById('meta').innerHTML='模型 '+esc(d.model||model)+' · 工具调用 '+d.steps+' 次（查库 '
         +d.db_query_count+' 次 / 知识库 '+d.kb_query_count+' 次）· 总耗时 '+(d.elapsed_ms/1000).toFixed(1)+' 秒'
-         +'（补全 '+((tm.completion_ms||0)/1000).toFixed(1)+'s + 循环 '+((tm.loop_ms||0)/1000).toFixed(1)+'s）'+w+gap;
+         +'（补全 '+((tm.completion_ms||0)/1000).toFixed(1)+'s + 循环 '+((tm.loop_ms||0)/1000).toFixed(1)+'s）'
+         +' · 会话上下文 '+(d.history_used||0)+' 轮'+w+gap+scTxt;
      var h='';
      (d.trace||[]).forEach(function(s){
        var cls=tagCls(s.tool||s.kind);
@@ -213,22 +223,6 @@ function collectNotice(){
   n.metrics=(NOTICE&&NOTICE.metrics||[]).map(function(m){ var c={}; for(var k2 in m){ c[k2]=m[k2]; } if(!isNaN(sc[m.key])){c.cur_score=sc[m.key];} return c; });
   return n;
 }
-var SKILLS=[];
-function loadSkills(){
-  fetch('/api/skills').then(function(r){return r.json();}).then(function(d){
-    SKILLS=d.skills||[];
-    var s=document.getElementById('skillpick'); s.innerHTML='<option value="">（不用技能文档）</option>';
-    SKILLS.forEach(function(k,i){var o=document.createElement('option');o.value=String(i);o.textContent=k.name+'（'+k.chars+' 字）';s.appendChild(o);});
-    try{var v=localStorage.getItem('secretary_skills');if(v){document.getElementById('skills').value=v;document.getElementById('skillnote').textContent='已恢复上次的 '+v.length+' 字技能配置';}}catch(e){}
-  }).catch(function(){});
-}
-function pickSkill(){
-  var i=document.getElementById('skillpick').value;
-  if(i===''){document.getElementById('skills').value='';document.getElementById('skillnote').textContent='';return;}
-  var k=SKILLS[parseInt(i,10)];
-  if(k){document.getElementById('skills').value=k.content;document.getElementById('skillnote').textContent='已载入 '+k.name+'（'+k.chars+' 字），可以直接改';}
-}
-loadSkills();
 loadReportMeta();
 
 function mdInline(s){

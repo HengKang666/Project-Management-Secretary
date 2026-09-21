@@ -1,19 +1,43 @@
 # -*- coding: utf-8 -*-
 """配置：读本项目根目录的 .env（默认），模型可用环境变量切换。"""
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.environ.get('SECRETARY_ENV', os.path.join(os.path.dirname(HERE), '.env'))
 
 
+REQUIRED = ('DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'LLM_BASE_URL', 'LLM_API_KEY')
+
+_TEMPLATE_HINT = (
+    '\n[配置] 缺少 %s\n'
+    '       这个文件不在仓库里（含密码，刻意不入库），需要自己建一份：\n'
+    '\n'
+    '         cp .env.example .env        # Linux / macOS\n'
+    '         copy .env.example .env      # Windows\n'
+    '\n'
+    '       然后把 6 项填上：%s\n'
+    '       各项说明见 .env.example 里的注释。\n'
+)
+
+
 def load_env(path=ENV_PATH):
+    if not os.path.exists(path):
+        raise SystemExit(_TEMPLATE_HINT % (path, ' / '.join(REQUIRED)))
     d = {}
     for line in open(path, encoding='utf-8'):
         line = line.strip()
         if not line or line.startswith('#') or '=' not in line:
             continue
         k, _, v = line.partition('=')
+        # 剥离行尾注释：仅当 '#' 前有空白时才算注释，避免截断含 '#' 的密码
+        v = re.split(r'\s+#', v, maxsplit=1)[0]
         d[k.strip()] = v.strip()
+    missing = [k for k in REQUIRED if not d.get(k)]
+    if missing:
+        raise SystemExit('[配置] %s 里这些项还是空的：%s\n'
+                         '       填好再启动（说明见 .env.example）。'
+                         % (path, ' / '.join(missing)))
     return d
 
 
@@ -27,6 +51,44 @@ DB = {
     'db': 'dlj_data',
 }
 SCHEMA = 'dlj_data'
+
+# 对话记录库：问答/会话/消息/执行明细写到这里（表结构见 agent_data_建表.sql）。
+# 与业务库同一台 MySQL、同一账号，只是库名不同。要用独立账号就改 DB_USER 那一套。
+# 整个记录功能可以用 SECRETARY_QA_LOG=0 关掉（关掉后服务照跑，只是不留记录）。
+AGENT_DB = os.environ.get('SECRETARY_AGENT_DB', 'agent_data')
+
+# 纠错词典的数据源：
+#   db   = 读数据库（默认）。词典在 agent_data 的 6 张 t_nc_* 表里，
+#          **服务启动时一次性全量读进内存**，之后纠错全程不查库。
+#   file = 读 libs/name_correction_lib/data/ 下的 CSV（零依赖，供独立部署/回退用）。
+# 建表见 tools/lexicon_schema.sql，导入见 tools/import_lexicon.py。
+# 环境变量和 .env 都可以配，环境变量优先。
+LEXICON_SOURCE = (os.environ.get('SECRETARY_LEXICON')
+                  or ENV.get('SECRETARY_LEXICON') or 'db').strip().lower()
+
+# 纠错词典库：与对话记录库同一台 MySQL、同一账号，只是库名不同。
+# 键名必须用 database 而不是 db —— pymysql 1.1+ 已把 db 标为废弃，传进去会刷警告。
+LEXICON_DB_NAME = (os.environ.get('SECRETARY_LEXICON_DB')
+                   or ENV.get('SECRETARY_LEXICON_DB') or AGENT_DB)
+LEXICON_DB = {
+    'host': DB['host'],
+    'port': DB['port'],
+    'user': DB['user'],
+    'password': DB['password'],
+    'database': LEXICON_DB_NAME,
+}
+
+# 词典热更新：每隔这么久（秒）查一次版本指纹，发现词典被改过就重建纠错引擎。
+# 这样人工 UPDATE 完词典不用重启服务。设 0 = 关闭探测（只在启动时加载一次）。
+LEXICON_RECHECK_SEC = int(os.environ.get('SECRETARY_LEXICON_RECHECK')
+                          or ENV.get('SECRETARY_LEXICON_RECHECK') or '60')
+
+# 多轮上下文：同一场会话里，把最近 N 轮问答带上作为模型上下文。
+# 作用：理解「那全市的呢」这类省略主语的问法；问题没提时间/地点时沿用上一轮口径。
+# 设 0 = 关闭（每次提问完全独立，与 2.0 之前行为一致）。
+# 2026-09-21 由 3 调到 5：长会话里「上一轮」常常超出 3 轮就丢失指代，
+# 5 轮的上下文增量可接受（每轮最多带 400 字回答，见 qa_log.load_context）。
+HISTORY_TURNS = int(os.environ.get('SECRETARY_HISTORY_TURNS', '5'))
 
 LLM_BASE = ENV['LLM_BASE_URL'].rstrip('/')
 LLM_KEY = ENV['LLM_API_KEY']

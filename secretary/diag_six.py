@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
+import os
 import sys, io
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import agent
 Q = '截至2026年9月，随州市全市，情况怎么样'

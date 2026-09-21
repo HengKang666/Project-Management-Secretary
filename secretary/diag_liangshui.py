@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
+import os
 import sys, io
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import agent
 d = agent.ask('2026年 两水供电所的情况', max_steps=0)

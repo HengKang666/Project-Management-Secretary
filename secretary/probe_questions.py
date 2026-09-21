@@ -21,7 +21,7 @@ QUESTIONS = [
     '随州市2026年的GDP是多少？',
 ]
 
-OUT = pathlib.Path(__file__).resolve().parent.parent / 'output'
+OUT = pathlib.Path(pathlib.Path(__file__).resolve().parents[1] / 'output')
 OUT.mkdir(parents=True, exist_ok=True)
 rows = []
 for i, q in enumerate(QUESTIONS, 1):

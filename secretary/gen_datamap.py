@@ -90,6 +90,6 @@ for key, ts in mapping:
         lines.append('| %s | %s |' % (key, ', '.join(ts)))
 lines.append('')
 
-out = Path(__file__).resolve().parent / '数据地图.md'
+out = Path(Path(__file__).resolve().parent / '数据地图.md')
 out.write_text('\n'.join(lines), encoding='utf-8')
 print('written', out, len(lines), 'lines')
