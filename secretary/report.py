@@ -15,6 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.join(os.path.dirname(HERE), 'skills')   # 技能文档放在仓库根 skills/，跨服务复用
 SKILL_DOC = os.path.join(SKILL_DIR, '年度缺陷治理计划分析.md')
 TABLE_DOC = os.path.join(SKILL_DIR, '数据表说明书.md')
+RULE_DOC = os.path.join(SKILL_DIR, '判据规则.md')
 
 BASE_SYSTEM = (
     '你是随州供电公司的项目管理秘书，现在要写一份可以上报的分析报告。\n'
@@ -33,7 +34,10 @@ BASE_SYSTEM = (
     '8. 时间用业务说法（「截至2026年9月」「去年同期」「上年度」）；不要提 AI、不要提工具、不要提查询过程。\n'
     '9. 缺陷类型、工单状态这类编号必须翻成中文再写。\n'
     '10. 金额一律万元、两位小数；比率与时长两位小数。\n'
-    '11. 先结论后依据，不要客套话，不要输出思考过程。'
+    '11. 先结论后依据，不要客套话，不要输出思考过程。\n'
+    '12.【篇幅硬限制】整篇不超过 300 字，每段一两句。\n'
+    '不要复述分析过程（不写「我查了」「经核实」「综合分析认为」这类过程话），不要写「数据来源」「口径说明」「字段」「表」这类段落，\n'
+    '不要罗列超过 5 条的明细清单（只说「等 N 条」并给前 3 条）。只留：结论 + 关键数字 + 该谁做什么。'
 )
 
 
@@ -48,9 +52,11 @@ def _system(doc_text=None):
     except Exception as e:
         skill = '（技能文档读取失败：%s）' % e
     try:
-        menu = semantic.table_menu()
+        rules = _read(RULE_DOC)
     except Exception:
-        menu = ''
+        rules = ''
+    if rules:
+        skill = skill + '\n\n【判据规则（判断标准的唯一出处，必须按它判断）】\n' + rules
     bar = '=' * 40
     return '\n\n'.join([
         BASE_SYSTEM,

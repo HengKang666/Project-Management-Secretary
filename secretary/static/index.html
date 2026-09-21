@@ -36,6 +36,8 @@
 .tq{display:block;width:100%;text-align:left;margin:5px 0;padding:7px 10px;font-size:12.5px;background:#f7f9fc;color:#20242b;border:1px solid #e3e6ea;border-radius:6px;cursor:pointer;line-height:1.45}
 .tq:hover{background:#eaf2fc;border-color:#9cbfe8}
 .tihint{background:#f0f7ff;border-left:3px solid #1a6fd4;border-radius:4px;padding:6px 9px;font-size:12px;color:#3c5878;margin:6px 0;line-height:1.55}
+.qbox{margin-top:8px;border-top:1px dashed #e6e8eb;padding-top:7px}
+.qbox summary{cursor:pointer;font-size:12.5px;color:#1a6fd4}
 .tgrp{border:1px solid #e6e8eb;border-radius:8px;padding:8px 10px;margin:7px 0;background:#fcfdfe}
 .tgrp-h{font-size:12px;color:#1a6fd4;font-weight:600;margin-bottom:5px}
 .trow{display:flex;gap:8px;align-items:center;margin:4px 0}
@@ -74,11 +76,11 @@
       </div>
       <div id="skillPanel" style="margin-top:10px"></div>
       <div class="bar" style="margin-top:8px">
-        <button onclick="runCompare()" style="background:#0f9d58">并排对比触发（同时跑两边）</button>
+        <button onclick="runCompare()" style="background:#0f9d58">并排对比：实际提问 vs 走技能触发</button>
       </div>
       <div class="tgrid" style="margin-top:8px">
-        <div><p class="lbl">① 只问问题（不带技能文档）</p><div id="cmpA" class="cmpout">（未触发）</div></div>
-        <div><p class="lbl">② 触发技能（带技能文档）</p><div id="cmpB" class="cmpout">（未触发）</div></div>
+        <div><p class="lbl">① 实际提问（人随口一问，没上游数据/没身份/没技能）</p><div id="cmpA" class="cmpout">（未触发）</div></div>
+        <div><p class="lbl">② 走技能触发（上游数据 + 身份范围 + 技能文档）</p><div id="cmpB" class="cmpout">（未触发）</div></div>
       </div>
     </div>
     <div class="card" style="margin-bottom:12px">
@@ -245,14 +247,14 @@ function showSkill(){
    +'<span style="color:#7b838d;font-size:12.5px">角色：'+esc(k.role||'')+'</span>'
    +(k.has_doc?'<span style="color:#0f9d58;font-size:12px">已挂技能文档 '+esc(k.doc)+'</span>':'<span style="color:#e08a00;font-size:12px">暂无技能文档</span>')+'</div>';
   if(k.note){h+='<div class="hint">'+esc(k.note)+'</div>';}
-  h+='<div style="font-size:12.5px;color:#7b838d;margin:6px 0 3px">预设问题（<b>都可以直接改</b>；勾上的才会跑 —— <b>只勾一条就是单问</b>，单问比合并跑更稳）：</div>';
+  var qhtml='<details class="qbox"><summary>预设问题（'+k.questions.length+' 条，点开可改可勾选）</summary>';
   k.questions.forEach(function(q,i){
-    h+='<div style="display:flex;gap:7px;align-items:flex-start;margin:5px 0">'
+    qhtml+='<div style="display:flex;gap:7px;align-items:flex-start;margin:5px 0">'
      +'<input type="checkbox" class="sqc" checked style="margin-top:9px">'
-     +'<input class="sq" value="'+esc(q.q)+'" style="flex:1;padding:7px 10px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px">'
+     +'<input class="sq" value="'+esc(q.q)+'" style="flex:1;padding:6px 9px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px">'
      +'</div>';
   });
-  h+='<div class="hint">想换问题就直接改上面的文本框；预设只是默认值。</div>';
+  qhtml+='<div class="hint">只勾一条就是单问（当前无多轮记忆，单问更可靠）。</div></details>';
   if(k.has_doc){
     h+='<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;color:#1a6fd4">查看这个技能的文档（'+k.doc_text.length+' 字）—— 它才是决定「怎么答」的固定流程</summary>'
      +'<pre style="max-height:280px;font-size:11.5px;background:#fafbfc;border:1px solid #eef0f2;border-radius:6px;padding:8px;margin-top:6px;white-space:pre-wrap">'+esc(k.doc_text)+'</pre></details>';
@@ -274,6 +276,7 @@ function showSkill(){
     h+='<div style="margin-top:8px;font-size:12.5px;color:#7b838d">状态变更规则（选工单 + 选规则，点触发即按规则拼问题并提醒对应角色）：</div>';
     h+='<div class="bar" style="flex-wrap:wrap;margin-top:6px"><select id="scOrder" style="flex:2;min-width:240px"></select><select id="scRule" style="flex:1;min-width:200px"></select></div>';
   }
+  h+=qhtml;
   h+='</div>';
   document.getElementById('skillPanel').innerHTML=h;
   if(k.trigger==='state'){
@@ -305,8 +308,11 @@ function runCompare(){
     model:document.getElementById('model').value};
   function go(el,useDoc){
     document.getElementById(el).textContent='跑中…（两边同时跑）';
-    return fetch('/api/skill/run',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(Object.assign({},base,{use_doc:useDoc}))})
+    var url = useDoc ? '/api/skill/run' : '/api/ask';
+    var payload = useDoc ? Object.assign({},base,{use_doc:true})
+                         : {question:qs.join(String.fromCharCode(10)), model:base.model};
+    return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)})
       .then(function(r){return r.json();})
       .then(function(d){document.getElementById(el).textContent=(d.answer||'（空）')+String.fromCharCode(10)+String.fromCharCode(10)+'[工具 '+(d.tool_calls||0)+' 次 / '+((d.elapsed_ms||0)/1000).toFixed(1)+' 秒 / 技能文档 '+(d.doc_chars||0)+' 字]';})
       .catch(function(e){document.getElementById(el).textContent='失败：'+e;});
