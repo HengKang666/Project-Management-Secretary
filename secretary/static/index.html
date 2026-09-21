@@ -56,17 +56,12 @@
 <div class="wrap">
   <div>
     <div class="card" style="margin-bottom:12px">
-      <p class="lbl">技能触发台 —— 每个技能按它自己的触发方式点一下，直接跑真实问题（左栏出答案，右栏出过程）</p>
-      <div id="triggers" class="tgrid"></div>
-    </div>
-    <div class="card" style="margin-bottom:12px">
-      <p class="lbl">状态变更模拟 —— 选一个工单 + 变更后的状态，按规则自动触发对应技能并提醒对应角色</p>
-      <div class="bar" style="flex-wrap:wrap">
-        <select id="scOrder" style="flex:2;min-width:260px"></select>
-        <select id="scRule" style="flex:1;min-width:220px"></select>
-        <button id="scGo" onclick="fireStateChange()">模拟状态变更</button>
+      <p class="lbl">技能触发台 —— 选一个技能，点触发，它会按技能文档把这一组问题一次跑完（左栏出结果，右栏出过程）</p>
+      <div class="bar">
+        <select id="skillSel" onchange="showSkill()" style="flex:1"></select>
+        <button id="skillGo" onclick="runSkill()">触发这个技能</button>
       </div>
-      <div class="hint" id="scNote"></div>
+      <div id="skillPanel" style="margin-top:10px"></div>
     </div>
     <div class="card" style="margin-bottom:12px">
       <p class="lbl">年度缺陷治理计划分析 —— 模拟收到一份「预算分配通知」（本期数字是模拟的，可以直接改；换供电所会重新生成）</p>
@@ -213,7 +208,63 @@ function collectNotice(){
   n.metrics=(NOTICE&&NOTICE.metrics||[]).map(function(m){ var c={}; for(var k2 in m){ c[k2]=m[k2]; } if(!isNaN(sc[m.key])){c.cur_score=sc[m.key];} return c; });
   return n;
 }
-var TRIGGERS={};
+var TT={};
+var TRIGGERS={}, TSEL=null, TRULES=[], TORDERS=[];
+function loadTriggers(){
+  fetch('/api/triggers').then(function(r){return r.json();}).then(function(d){
+    TT=d.trigger_types||{};
+    var s=document.getElementById('skillSel'); s.innerHTML='';
+    (d.skills||[]).forEach(function(k){TRIGGERS[k.id]=k;var o=document.createElement('option');o.value=k.id;o.textContent=k.name+'（'+((TT[k.trigger]||{}).label||'')+'）';s.appendChild(o);});
+    fetch('/api/statechange').then(function(r){return r.json();}).then(function(x){TRULES=x.rules||[];TORDERS=x.orders||[];showSkill();}).catch(function(){showSkill();});
+  }).catch(function(){});
+}
+function showSkill(){
+  var id=document.getElementById('skillSel').value; var k=TRIGGERS[id]; TSEL=k; if(!k)return;
+  var t=TT[k.trigger]||{label:k.trigger};
+  var h='<div class="tmod"><div class="tmod-h"><span class="ttag t-'+esc(k.trigger)+'">'+esc(t.label)+'</span>'
+   +'<span style="color:#7b838d;font-size:12.5px">角色：'+esc(k.role||'')+'</span>'
+   +(k.has_doc?'<span style="color:#0f9d58;font-size:12px">已挂技能文档 '+esc(k.doc)+'</span>':'<span style="color:#e08a00;font-size:12px">暂无技能文档</span>')+'</div>';
+  if(k.note){h+='<div class="hint">'+esc(k.note)+'</div>';}
+  h+='<div style="font-size:12.5px;color:#7b838d;margin:6px 0 3px">这个技能包含 '+k.questions.length+' 个问题，触发后会一次全跑：</div>';
+  k.questions.forEach(function(q,i){h+='<div class="tq" style="cursor:default">'+(i+1)+'. '+esc(q.q)+'</div>';});
+  if(k.trigger==='state'){
+    h+='<div style="margin-top:8px;font-size:12.5px;color:#7b838d">状态变更规则（选工单 + 选规则，点触发即按规则拼问题并提醒对应角色）：</div>';
+    h+='<div class="bar" style="flex-wrap:wrap;margin-top:6px"><select id="scOrder" style="flex:2;min-width:240px"></select><select id="scRule" style="flex:1;min-width:200px"></select></div>';
+  }
+  h+='</div>';
+  document.getElementById('skillPanel').innerHTML=h;
+  if(k.trigger==='state'){
+    var so=document.getElementById('scOrder'); so.innerHTML='';
+    TORDERS.forEach(function(o,i){var op=document.createElement('option');op.value=String(i);op.textContent=o.status_cn+' ｜ '+o.work_name+' ｜ '+(o.budget/10000).toFixed(2)+'万';so.appendChild(op);});
+    var sr=document.getElementById('scRule'); sr.innerHTML='';
+    TRULES.forEach(function(r,i){var op=document.createElement('option');op.value=String(i);op.textContent=r.from+' → '+r.to+'（提醒 '+r.role+'）';sr.appendChild(op);});
+  }
+}
+function runSkill(){
+  var k=TSEL; if(!k)return;
+  var b=document.getElementById('skillGo'); b.disabled=true; b.textContent='技能执行中…';
+  document.getElementById('answer').textContent='';document.getElementById('report').innerHTML='';
+  document.getElementById('completed').textContent='';document.getElementById('trace').innerHTML='';document.getElementById('meta').innerHTML='';
+  document.getElementById('answer').textContent='技能「'+k.name+'」执行中，会按技能文档把这一组问题一起跑，约 1-2 分钟…';
+  var body={skill_id:k.id,model:document.getElementById('model').value};
+  if(k.trigger==='state'){
+    var o=TORDERS[parseInt((document.getElementById('scOrder')||{value:'0'}).value,10)]||{};
+    var r=TRULES[parseInt((document.getElementById('scRule')||{value:'0'}).value,10)]||{};
+    body.work_name=o.work_name||''; body.from=r.from||''; body.to=r.to||'';
+  }
+  fetch('/api/skill/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+   .then(function(r){return r.json();})
+   .then(function(d){
+     document.getElementById('answer').textContent=d.answer||'（空）';
+     document.getElementById('trace').innerHTML=(d.trace||[]).map(function(s){
+       var nm=s.kind==='tool'?s.tool:'回答'; var cls=s.kind==='tool'?(s.tool==='run_sql'?'t-db':'t-meta'):'t-ans';
+       return '<details class="step"><summary><span class="tag '+cls+'">'+esc(nm)+'</span><span class="ms">'+(s.ms||0)+' ms</span></summary><pre>'+esc(JSON.stringify(s.args||s.content||'',null,1)).slice(0,4000)+'</pre></details>';
+     }).join('');
+     document.getElementById('meta').innerHTML='技能 '+esc(d.skill||'')+' ｜ 问题 '+ (d.questions||0) +' 个 ｜ 技能文档 '+ (d.doc_chars||0) +' 字 ｜ 工具 '+(d.tool_calls||0)+' 次 ｜ '+((d.elapsed_ms||0)/1000).toFixed(1)+' 秒';
+   })
+   .catch(function(e){document.getElementById('answer').textContent='请求失败：'+e;})
+   .then(function(){b.disabled=false;b.textContent='触发这个技能';});
+}
 function loadTriggers(){
   fetch('/api/triggers').then(function(r){return r.json();}).then(function(d){
     var tt=d.trigger_types||{}, h='';
@@ -243,10 +294,6 @@ function fireTrigger(sid,qi){
   try{localStorage.setItem('secretary_skills',s.doc_text||'');}catch(e){}
   ask();
 }
-document.getElementById('triggers').addEventListener('click',function(e){
-  var b=e.target.closest('.tq'); if(!b)return;
-  fireTrigger(b.getAttribute('data-sid'), parseInt(b.getAttribute('data-qi'),10));
-});
 loadTriggers();
 var SCRULES=[], SCORDERS=[];
 function loadStateChange(){

@@ -91,6 +91,18 @@ class H(BaseHTTPRequestHandler):
         if path == '/api/asr':
             self._handle_asr()
             return
+        if path == '/api/skill/run':
+            data = self._read_json()
+            try:
+                import report as reportmod
+                r = reportmod.run_skill((data.get('skill_id') or '').strip(),
+                                        model=data.get('model') or None,
+                                        work_name=data.get('work_name') or '',
+                                        frm=data.get('from') or '', to=data.get('to') or '')
+            except Exception as e:
+                r = {'answer': '服务异常：' + type(e).__name__ + ' ' + str(e)[:200], 'trace': [], 'tool_calls': 0}
+            self._send(200, json.dumps(r, ensure_ascii=False, default=str), 'application/json')
+            return
         if path == '/api/report/notice':
             self._handle_notice()
             return

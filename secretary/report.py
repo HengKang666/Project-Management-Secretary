@@ -42,9 +42,9 @@ def _read(path):
         return f.read()
 
 
-def _system():
+def _system(doc_text=None):
     try:
-        skill = _read(SKILL_DOC)
+        skill = doc_text if doc_text is not None else _read(SKILL_DOC)
     except Exception as e:
         skill = '（技能文档读取失败：%s）' % e
     try:
@@ -57,6 +57,34 @@ def _system():
         bar + '\n【技能文档：必须按它来分析】\n' + bar + '\n' + skill,
         bar + '\n【可查的表（表名与字段以字典为准，用 list_tables / find_column / describe_table 查）】\n' + bar + '\n' + menu,
     ])
+
+
+def run_skill(skill_id, model=None, work_name='', frm='', to=''):
+    """触发一个技能：把它的整组问题 + 技能文档一起交给模型，一次跑完出一份结果。"""
+    t0 = time.time()
+    cfg = list_triggers()
+    sk = None
+    for s in cfg.get('skills') or []:
+        if s.get('id') == skill_id:
+            sk = s
+            break
+    if not sk:
+        return {'skill': str(skill_id), 'answer': '没有这个技能。', 'trace': [], 'tool_calls': 0}
+    doc = sk.get('doc_text') or ''
+    qs = [q.get('q') for q in (sk.get('questions') or [])]
+    head = '你的角色：%s。\n' % (sk.get('role') or '')
+    if work_name:
+        head += ('刚刚发生了一次状态变更：工单「%s」从「%s」变为「%s」。请结合这次变更来答。\n' % (work_name, frm, to))
+    head += ('下面是这个技能要你回答的 %d 个问题，**请合并成一份回答**（不要一问一答地重复），'
+             '按技能文档要求的段落与口径来组织：\n' % len(qs))
+    user = head + '\n'.join('%d. %s' % (i + 1, q) for i, q in enumerate(qs))
+    if not doc:
+        user += '\n\n（本技能暂无技能文档，请按常识与已有提示词作答，并说明你依据了什么。）'
+    answer, trace, blocked = _loop(_system(doc), user, model or agent.config.MODEL)
+    calls = [t for t in trace if t.get('kind') == 'tool']
+    return {'skill': sk.get('name'), 'skill_id': skill_id, 'answer': answer, 'trace': trace,
+            'questions': len(qs), 'doc': sk.get('doc'), 'doc_chars': len(doc), 'blocked': blocked,
+            'tool_calls': len(calls), 'elapsed_ms': int((time.time() - t0) * 1000)}
 
 
 def state_change_sim():
