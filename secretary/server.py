@@ -49,6 +49,9 @@ class H(BaseHTTPRequestHandler):
         if path in ('/', '/index.html'):
             with open(os.path.join(HERE, 'static', 'index.html'), encoding='utf-8') as f:
                 self._send(200, f.read(), 'text/html')
+        elif path in ('/skills', '/skills.html'):
+            with open(os.path.join(HERE, 'static', 'skills.html'), encoding='utf-8') as f:
+                self._send(200, f.read(), 'text/html')
         elif path in ('/asr', '/asr.html'):
             with open(os.path.join(HERE, 'static', 'asr.html'), encoding='utf-8') as f:
                 self._send(200, f.read(), 'text/html')

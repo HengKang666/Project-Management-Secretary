@@ -61,27 +61,12 @@
   <h1>项目管理秘书 · 模型自主问答</h1>
   <select id="model" title="选择模型"></select>
   <span id="modelnote" style="font-size:12px;color:#7b838d"></span>
+  <a href="/skills" style="margin-left:auto;font-size:13px;color:#1a6fd4;text-decoration:none">技能触发台 →</a>
 </header>
 <div class="wrap">
   <div>
     <div class="card" style="margin-bottom:12px">
-      <p class="lbl">技能触发台 —— 选一个技能，点触发，它会按技能文档把这一组问题一次跑完（左栏出结果，右栏出过程）</p>
-      <div class="bar">
-        <select id="skillSel" onchange="showSkill()" style="flex:1"></select>
-        <button id="skillGo" onclick="runSkill()">触发这个技能</button>
-      </div>
-      <div class="bar" style="margin-top:6px">
-        <select id="roleSel" title="以谁的身份触发"></select>
-        <select id="scopeSel" title="数据范围（层级）" style="flex:1"></select>
-      </div>
-      <div id="skillPanel" style="margin-top:10px"></div>
-      <div class="bar" style="margin-top:8px">
-        <button onclick="runCompare()" style="background:#0f9d58">并排对比：实际提问 vs 走技能触发</button>
-      </div>
-      <div class="tgrid" style="margin-top:8px">
-        <div><p class="lbl">① 实际提问（人随口一问，没上游数据/没身份/没技能）</p><div id="cmpA" class="cmpout">（未触发）</div></div>
-        <div><p class="lbl">② 走技能触发（上游数据 + 身份范围 + 技能文档）</p><div id="cmpB" class="cmpout">（未触发）</div></div>
-      </div>
+      <p class="lbl">这一页是「随口一问」的问答页。要按技能触发（带上游数据、身份范围、技能文档），去 <a href="/skills" style="color:#1a6fd4">技能触发台</a>。</p>
     </div>
     <div class="card" style="margin-bottom:12px">
       <p class="lbl">年度缺陷治理计划分析 —— 模拟收到一份「预算分配通知」（本期数字是模拟的，可以直接改；换供电所会重新生成）</p>
@@ -228,161 +213,6 @@ function collectNotice(){
   n.metrics=(NOTICE&&NOTICE.metrics||[]).map(function(m){ var c={}; for(var k2 in m){ c[k2]=m[k2]; } if(!isNaN(sc[m.key])){c.cur_score=sc[m.key];} return c; });
   return n;
 }
-var TT={};
-var TRIGGERS={}, TSEL=null, TRULES=[], TORDERS=[];
-function loadTriggers(){
-  fetch('/api/triggers').then(function(r){return r.json();}).then(function(d){
-    TT=d.trigger_types||{};
-    var s=document.getElementById('skillSel'); s.innerHTML='';
-    (d.skills||[]).forEach(function(k){TRIGGERS[k.id]=k;var o=document.createElement('option');o.value=k.id;o.textContent=k.name+'（'+((TT[k.trigger]||{}).label||'')+'）';s.appendChild(o);});
-    var rs=document.getElementById('roleSel'); (d.roles||[]).forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent='身份：'+x;rs.appendChild(o);});
-    var ss=document.getElementById('scopeSel'); (d.scopes||[]).forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent='范围：'+x;ss.appendChild(o);});
-    fetch('/api/statechange').then(function(r){return r.json();}).then(function(x){TRULES=x.rules||[];TORDERS=x.orders||[];showSkill();}).catch(function(){showSkill();});
-  }).catch(function(){});
-}
-function showSkill(){
-  var id=document.getElementById('skillSel').value; var k=TRIGGERS[id]; TSEL=k; if(!k)return;
-  var t=TT[k.trigger]||{label:k.trigger};
-  var h='<div class="tmod"><div class="tmod-h"><span class="ttag t-'+esc(k.trigger)+'">'+esc(t.label)+'</span>'
-   +'<span style="color:#7b838d;font-size:12.5px">角色：'+esc(k.role||'')+'</span>'
-   +(k.has_doc?'<span style="color:#0f9d58;font-size:12px">已挂技能文档 '+esc(k.doc)+'</span>':'<span style="color:#e08a00;font-size:12px">暂无技能文档</span>')+'</div>';
-  if(k.note){h+='<div class="hint">'+esc(k.note)+'</div>';}
-  var qhtml='<details class="qbox"><summary>预设问题（'+k.questions.length+' 条，点开可改可勾选）</summary>';
-  k.questions.forEach(function(q,i){
-    qhtml+='<div style="display:flex;gap:7px;align-items:flex-start;margin:5px 0">'
-     +'<input type="checkbox" class="sqc" checked style="margin-top:9px">'
-     +'<input class="sq" value="'+esc(q.q)+'" style="flex:1;padding:6px 9px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px">'
-     +'</div>';
-  });
-  qhtml+='<div class="hint">只勾一条就是单问（当前无多轮记忆，单问更可靠）。</div></details>';
-  if(k.has_doc){
-    h+='<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;color:#1a6fd4">查看这个技能的文档（'+k.doc_text.length+' 字）—— 它才是决定「怎么答」的固定流程</summary>'
-     +'<pre style="max-height:280px;font-size:11.5px;background:#fafbfc;border:1px solid #eef0f2;border-radius:6px;padding:8px;margin-top:6px;white-space:pre-wrap">'+esc(k.doc_text)+'</pre></details>';
-  }
-  if(t.hint){h+='<div class="tihint">'+esc(t.hint)+'</div>';}
-  if(k.inputs && k.inputs.length){
-    var groups=[], gmap={};
-    k.inputs.forEach(function(it){ var g=it.group||'上游数据'; if(!gmap[g]){gmap[g]=[];groups.push(g);} gmap[g].push(it); });
-    groups.forEach(function(g){
-      h+='<div class="tgrp"><div class="tgrp-h">'+esc(g)+'</div>';
-      gmap[g].forEach(function(it){
-        h+='<div class="trow"><span class="tlb">'+esc(it.label)+'</span>'
-         +'<input class="sin" data-label="'+esc(it.label)+'" value="'+esc(it.value)+'"></div>';
-      });
-      h+='</div>';
-    });
-  }
-  if(k.trigger==='state'){
-    h+='<div style="margin-top:8px;font-size:12.5px;color:#7b838d">状态变更规则（选工单 + 选规则，点触发即按规则拼问题并提醒对应角色）：</div>';
-    h+='<div class="bar" style="flex-wrap:wrap;margin-top:6px"><select id="scOrder" style="flex:2;min-width:240px"></select><select id="scRule" style="flex:1;min-width:200px"></select></div>';
-  }
-  h+=qhtml;
-  h+='</div>';
-  document.getElementById('skillPanel').innerHTML=h;
-  if(k.trigger==='state'){
-    var so=document.getElementById('scOrder'); so.innerHTML='';
-    TORDERS.forEach(function(o,i){var op=document.createElement('option');op.value=String(i);op.textContent=o.status_cn+' ｜ '+o.work_name+' ｜ '+(o.budget/10000).toFixed(2)+'万';so.appendChild(op);});
-    var sr=document.getElementById('scRule'); sr.innerHTML='';
-    TRULES.forEach(function(r,i){var op=document.createElement('option');op.value=String(i);op.textContent=r.from+' → '+r.to+'（提醒 '+r.role+'）';sr.appendChild(op);});
-  }
-}
-function collectInputs(){
-  var out=[];
-  Array.prototype.forEach.call(document.querySelectorAll('.sin'), function(el){
-    out.push({label: el.getAttribute('data-label'), value: el.value});
-  });
-  return out;
-}
-function collectQs(){
-  var out=[]; var all=document.querySelectorAll('.sq'), chk=document.querySelectorAll('.sqc');
-  Array.prototype.forEach.call(all, function(el,i){ if(chk[i] && chk[i].checked && el.value.trim()){ out.push(el.value.trim()); } });
-  return out;
-}
-function runCompare(){
-  var k=TSEL; if(!k)return;
-  var qs=collectQs();
-  if(!qs.length){ document.getElementById('cmpA').textContent='至少勾一条问题。'; return; }
-  var base={skill_id:k.id,questions:qs,inputs:collectInputs(),
-    role:(document.getElementById('roleSel')||{value:''}).value,
-    scope:(document.getElementById('scopeSel')||{value:''}).value,
-    model:document.getElementById('model').value};
-  function go(el,useDoc){
-    document.getElementById(el).textContent='跑中…（两边同时跑）';
-    var url = useDoc ? '/api/skill/run' : '/api/ask';
-    var payload = useDoc ? Object.assign({},base,{use_doc:true})
-                         : {question:qs.join(String.fromCharCode(10)), model:base.model};
-    return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(payload)})
-      .then(function(r){return r.json();})
-      .then(function(d){document.getElementById(el).textContent=(d.answer||'（空）')+String.fromCharCode(10)+String.fromCharCode(10)+'[工具 '+(d.tool_calls||0)+' 次 / '+((d.elapsed_ms||0)/1000).toFixed(1)+' 秒 / 技能文档 '+(d.doc_chars||0)+' 字]';})
-      .catch(function(e){document.getElementById(el).textContent='失败：'+e;});
-  }
-  go('cmpA', false);
-  go('cmpB', true);
-}
-function runSkill(){
-  var k=TSEL; if(!k)return;
-  var b=document.getElementById('skillGo'); b.disabled=true; b.textContent='技能执行中…';
-  document.getElementById('answer').textContent='';document.getElementById('report').innerHTML='';
-  document.getElementById('completed').textContent='';document.getElementById('trace').innerHTML='';document.getElementById('meta').innerHTML='';
-  document.getElementById('answer').textContent='技能「'+k.name+'」执行中，会按技能文档把这一组问题一起跑，约 1-2 分钟…';
-  var qs=[]; var all=document.querySelectorAll('.sq'), chk=document.querySelectorAll('.sqc');
-  Array.prototype.forEach.call(all, function(el,i){ if(chk[i] && chk[i].checked && el.value.trim()){ qs.push(el.value.trim()); } });
-  if(!qs.length){ b.disabled=false; b.textContent='触发这个技能'; document.getElementById('answer').textContent='至少勾一条问题。'; return; }
-  var body={skill_id:k.id,model:document.getElementById('model').value,questions:qs,
-        role:(document.getElementById('roleSel')||{value:''}).value,
-        scope:(document.getElementById('scopeSel')||{value:''}).value,inputs:collectInputs()};
-  if(k.trigger==='state'){
-    var o=TORDERS[parseInt((document.getElementById('scOrder')||{value:'0'}).value,10)]||{};
-    var r=TRULES[parseInt((document.getElementById('scRule')||{value:'0'}).value,10)]||{};
-    body.work_name=o.work_name||''; body.from=r.from||''; body.to=r.to||'';
-  }
-  fetch('/api/skill/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-   .then(function(r){return r.json();})
-   .then(function(d){
-     document.getElementById('answer').textContent=d.answer||'（空）';
-     document.getElementById('trace').innerHTML=(d.trace||[]).map(function(s){
-       var nm=s.kind==='tool'?s.tool:'回答'; var cls=s.kind==='tool'?(s.tool==='run_sql'?'t-db':'t-meta'):'t-ans';
-       return '<details class="step"><summary><span class="tag '+cls+'">'+esc(nm)+'</span><span class="ms">'+(s.ms||0)+' ms</span></summary><pre>'+esc(JSON.stringify(s.args||s.content||'',null,1)).slice(0,4000)+'</pre></details>';
-     }).join('');
-     document.getElementById('meta').innerHTML='技能 '+esc(d.skill||'')+' ｜ 问题 '+ (d.questions||0) +' 个 ｜ 技能文档 '+ (d.doc_chars||0) +' 字 ｜ 工具 '+(d.tool_calls||0)+' 次 ｜ '+((d.elapsed_ms||0)/1000).toFixed(1)+' 秒';
-   })
-   .catch(function(e){document.getElementById('answer').textContent='请求失败：'+e;})
-   .then(function(){b.disabled=false;b.textContent='触发这个技能';});
-}
-function fireTrigger(sid,qi){
-  var s=TRIGGERS[sid]; if(!s)return;
-  var q=(s.questions||[])[qi]; if(!q)return;
-  document.getElementById('q').value=q.q;
-  document.getElementById('skills').value=s.doc_text||'';
-  document.getElementById('skillnote').textContent=s.has_doc?('已挂载技能文档：'+s.doc):'该技能暂无技能文档，这次走通用逻辑（正好用来对照效果）';
-  try{localStorage.setItem('secretary_skills',s.doc_text||'');}catch(e){}
-  ask();
-}
-loadTriggers();
-var SCRULES=[], SCORDERS=[];
-function loadStateChange(){
-  fetch('/api/statechange').then(function(r){return r.json();}).then(function(d){
-    SCRULES=d.rules||[]; SCORDERS=d.orders||[];
-    var s=document.getElementById('scOrder'); s.innerHTML='';
-    SCORDERS.forEach(function(o,i){var op=document.createElement('option');op.value=String(i);op.textContent=o.status_cn+' ｜ '+o.work_name+' ｜ '+(o.budget/10000).toFixed(2)+'万';s.appendChild(op);});
-    var rl=document.getElementById('scRule'); rl.innerHTML='';
-    SCRULES.forEach(function(r,i){var op=document.createElement('option');op.value=String(i);op.textContent=r.from+' → '+r.to+' （触发：'+r.skill+'）';rl.appendChild(op);});
-    document.getElementById('scNote').textContent='规则 '+SCRULES.length+' 条；假数据工单 '+SCORDERS.length+' 条（取自真实未完结工单）。点按钮会按规则带上对应技能文档。';
-  }).catch(function(){});
-}
-function fireStateChange(){
-  var o=SCORDERS[parseInt(document.getElementById('scOrder').value,10)];
-  var r=SCRULES[parseInt(document.getElementById('scRule').value,10)];
-  if(!o||!r){return;}
-  var q=r.question.split('{work_name}').join(o.work_name).split('{from}').join(r.from).split('{to}').join(r.to);
-  document.getElementById('q').value=q;
-  var t=TRIGGERS[r.skill_id];
-  document.getElementById('skills').value=(t&&t.doc_text)||'';
-  document.getElementById('skillnote').textContent='规则 '+r.id+'：'+r.from+' → '+r.to+'，触发「'+r.skill+'」，提醒对象：'+r.role;
-  ask();
-}
-loadStateChange();
 var SKILLS=[];
 function loadSkills(){
   fetch('/api/skills').then(function(r){return r.json();}).then(function(d){

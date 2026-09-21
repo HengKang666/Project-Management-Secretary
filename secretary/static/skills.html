@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>项目管理秘书 · 技能触发台</title>
+<style>
+ body{font-family:system-ui,Segoe UI,Microsoft YaHei,sans-serif;margin:0;background:#f7f8fa;color:#20242b}
+ header{padding:14px 20px;background:#fff;border-bottom:1px solid #e6e8eb;display:flex;align-items:center;gap:14px}
+ h1{font-size:16px;margin:0;font-weight:600}
+ select{padding:5px 8px;border:1px solid #cfd4da;border-radius:5px;font-size:13px}
+ .wrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;padding:16px 20px;align-items:start}
+ .bar{display:flex;gap:8px}
+ input{flex:1;padding:10px;font-size:15px;border:1px solid #cfd4da;border-radius:6px;background:#fff}
+ button{padding:10px 18px;font-size:15px;border:0;border-radius:6px;background:#1a6fd4;color:#fff;cursor:pointer}
+ button:disabled{background:#9cbfe8}
+ .card{background:#fff;border:1px solid #e6e8eb;border-radius:8px;padding:14px}
+ .lbl{font-size:12px;color:#7b838d;margin:0 0 8px}
+ #answer{white-space:pre-wrap;line-height:1.75;min-height:80px;font-size:15px}
+ .step{border:1px solid #e6e8eb;border-radius:6px;margin:0 0 8px;overflow:hidden}
+ .step summary{cursor:pointer;padding:8px 10px;font-size:13px;background:#fafbfc;list-style:none}
+ .step summary::-webkit-details-marker{display:none}
+ .tag{display:inline-block;padding:1px 7px;border-radius:3px;font-size:12px;margin-right:8px;color:#fff}
+ .t-kb{background:#7a5af8}.t-db{background:#1a6fd4}.t-meta{background:#8a94a0}.t-ans{background:#0f9d58}
+ .ms{float:right;color:#9aa2ab;font-size:12px}
+ pre{margin:0;padding:10px;font-size:12px;overflow:auto;max-height:300px;background:#fff;border-top:1px solid #eef0f2;white-space:pre-wrap;word-break:break-all}
+ .hint{font-size:12px;color:#9aa2ab;margin-top:8px}
+ .tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
+ .tmod{border:1px solid #e6e8eb;border-radius:8px;padding:10px;background:#fff}
+ .tmod-h{font-size:13.5px;margin-bottom:6px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+ .ttag{font-size:11px;color:#fff;border-radius:3px;padding:1px 7px;white-space:nowrap}
+ .t-manual{background:#1a6fd4}.t-form{background:#0f9d58}.t-precheck{background:#e08a00}
+ .t-scan{background:#7a5af8}.t-state{background:#c0392b}
+ .tq{display:block;width:100%;text-align:left;margin:5px 0;padding:7px 10px;font-size:12.5px;background:#f7f9fc;color:#20242b;border:1px solid #e3e6ea;border-radius:6px;cursor:pointer;line-height:1.45}
+ .tihint{background:#f0f7ff;border-left:3px solid #1a6fd4;border-radius:4px;padding:6px 9px;font-size:12px;color:#3c5878;margin:6px 0;line-height:1.55}
+ .qbox{margin-top:8px;border-top:1px dashed #e6e8eb;padding-top:7px}
+ .qbox summary{cursor:pointer;font-size:12.5px;color:#1a6fd4}
+ .tgrp{border:1px solid #e6e8eb;border-radius:8px;padding:8px 10px;margin:7px 0;background:#fcfdfe}
+ .tgrp-h{font-size:12px;color:#1a6fd4;font-weight:600;margin-bottom:5px}
+ .trow{display:flex;gap:8px;align-items:center;margin:4px 0}
+ .tlb{min-width:150px;font-size:12.5px;color:#5b6470}
+ .trow input{flex:1;padding:6px 9px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px}
+ .cmpout{border:1px solid #e6e8eb;border-radius:8px;padding:10px;font-size:12.5px;line-height:1.65;background:#fff;white-space:pre-wrap;max-height:520px;overflow:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>项目管理秘书 · 技能触发台</h1>
+  <select id="model" title="选择模型"></select>
+  <span id="modelnote" style="font-size:12px;color:#7b838d"></span>
+  <a href="/" style="margin-left:auto;font-size:13px;color:#1a6fd4;text-decoration:none">← 回问答页</a>
+</header>
+<div class="wrap">
+  <div>
+    <div class="card" style="margin-bottom:12px">
+      <p class="lbl">选一个技能，点「触发这个技能」—— 它按技能文档把这一组问题一次跑完，上游数据可以直接改</p>
+      <div class="bar">
+        <select id="skillSel" onchange="showSkill()" style="flex:1"></select>
+        <button id="skillGo" onclick="runSkill()">触发这个技能</button>
+      </div>
+      <div class="bar" style="margin-top:6px">
+        <select id="roleSel" title="以谁的身份触发"></select>
+        <select id="scopeSel" title="数据范围（层级）" style="flex:1"></select>
+      </div>
+      <div id="skillPanel" style="margin-top:10px"></div>
+      <div class="bar" style="margin-top:8px">
+        <button onclick="runCompare()" style="background:#0f9d58">并排对比：实际提问 vs 走技能触发</button>
+      </div>
+      <div class="tgrid" style="margin-top:8px">
+        <div><p class="lbl">① 实际提问（人随口一问，没上游数据 / 没身份 / 没技能）</p><div id="cmpA" class="cmpout">（未触发）</div></div>
+        <div><p class="lbl">② 走技能触发（上游数据 + 身份范围 + 技能文档）</p><div id="cmpB" class="cmpout">（未触发）</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <p class="lbl">回答</p>
+      <div id="answer">（未触发）</div>
+      <div id="meta" style="font-size:12px;color:#7b838d;margin-top:12px;border-top:1px solid #f0f1f3;padding-top:10px"></div>
+    </div>
+  </div>
+  <div class="card">
+    <p class="lbl">处理过程（工具调用轨迹）</p>
+    <div id="trace"></div>
+  </div>
+</div>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+var NL=String.fromCharCode(10);
+var MODELNOTE={};
+function loadModels(){
+  fetch('/api/models').then(function(r){return r.json();}).then(function(d){
+    var sel=document.getElementById('model'), groups={}, order=[];
+    (d.models||[]).forEach(function(m){
+      if(!groups[m.group]){groups[m.group]=[];order.push(m.group);}
+      groups[m.group].push(m); MODELNOTE[m.id]=m.note||'';
+    });
+    order.forEach(function(g){
+      var og=document.createElement('optgroup'); og.label=g;
+      groups[g].forEach(function(m){
+        var op=document.createElement('option'); op.value=m.id;
+        op.textContent=m.label+'  ('+m.id+')';
+        og.appendChild(op);
+      });
+      sel.appendChild(og);
+    });
+    sel.value=d.default||'';
+    document.getElementById('modelnote').textContent=MODELNOTE[sel.value]||'';
+  }).catch(function(e){document.getElementById('modelnote').textContent='模型列表加载失败：'+e;});
+}
+document.getElementById('model').addEventListener('change',function(){
+  document.getElementById('modelnote').textContent=MODELNOTE[this.value]||'';
+});
+loadModels();
+function tagCls(t){return t==='kb_search'?'t-kb':(t==='run_sql'?'t-db':(t==='answer'?'t-ans':'t-meta'));}
+var TT={};
+var TRIGGERS={}, TSEL=null, TRULES=[], TORDERS=[];
+function loadTriggers(){
+  fetch('/api/triggers').then(function(r){return r.json();}).then(function(d){
+    TT=d.trigger_types||{};
+    var s=document.getElementById('skillSel'); s.innerHTML='';
+    (d.skills||[]).forEach(function(k){TRIGGERS[k.id]=k;var o=document.createElement('option');o.value=k.id;o.textContent=k.name+'（'+((TT[k.trigger]||{}).label||'')+'）';s.appendChild(o);});
+    var rs=document.getElementById('roleSel'); (d.roles||[]).forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent='身份：'+x;rs.appendChild(o);});
+    var ss=document.getElementById('scopeSel'); (d.scopes||[]).forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent='范围：'+x;ss.appendChild(o);});
+    fetch('/api/statechange').then(function(r){return r.json();}).then(function(x){TRULES=x.rules||[];TORDERS=x.orders||[];showSkill();}).catch(function(){showSkill();});
+  }).catch(function(e){document.getElementById('skillPanel').textContent='技能清单加载失败：'+e;});
+}
+function showSkill(){
+  var id=document.getElementById('skillSel').value; var k=TRIGGERS[id]; TSEL=k; if(!k)return;
+  var t=TT[k.trigger]||{label:k.trigger};
+  var h='<div class="tmod"><div class="tmod-h"><span class="ttag t-'+esc(k.trigger)+'">'+esc(t.label)+'</span>'
+   +'<span style="color:#7b838d;font-size:12.5px">触发方式：'+esc(k.trigger)+'</span>'
+   +(k.has_doc?'<span style="color:#0f9d58;font-size:12px">已挂技能文档 '+esc(k.doc)+'</span>':'<span style="color:#e08a00;font-size:12px">暂无技能文档</span>')+'</div>';
+  if(k.note){h+='<div class="hint">'+esc(k.note)+'</div>';}
+  var qhtml='<details class="qbox"><summary>预设问题（'+k.questions.length+' 条，点开可改可勾选）</summary>';
+  k.questions.forEach(function(q,i){
+    qhtml+='<div style="display:flex;gap:7px;align-items:flex-start;margin:5px 0">'
+     +'<input type="checkbox" class="sqc" checked style="margin-top:9px">'
+     +'<input class="sq" value="'+esc(q.q)+'" style="flex:1;padding:6px 9px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px">'
+     +'</div>';
+  });
+  qhtml+='<div class="hint">只勾一条就是单问（当前无多轮记忆，单问更可靠）。</div></details>';
+  if(k.has_doc){
+    h+='<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;color:#1a6fd4">查看这个技能的文档（'+k.doc_text.length+' 字）—— 它才是决定「怎么答」的固定流程</summary>'
+     +'<pre style="max-height:280px;font-size:11.5px;background:#fafbfc;border:1px solid #eef0f2;border-radius:6px;padding:8px;margin-top:6px;white-space:pre-wrap">'+esc(k.doc_text)+'</pre></details>';
+  }
+  if(t.hint){h+='<div class="tihint">'+esc(t.hint)+'</div>';}
+  if(k.inputs && k.inputs.length){
+    var groups=[], gmap={};
+    k.inputs.forEach(function(it){ var g=it.group||'上游数据'; if(!gmap[g]){gmap[g]=[];groups.push(g);} gmap[g].push(it); });
+    groups.forEach(function(g){
+      h+='<div class="tgrp"><div class="tgrp-h">'+esc(g)+'</div>';
+      gmap[g].forEach(function(it){
+        h+='<div class="trow"><span class="tlb">'+esc(it.label)+'</span>'
+         +'<input class="sin" data-label="'+esc(it.label)+'" value="'+esc(it.value)+'"></div>';
+      });
+      h+='</div>';
+    });
+  }
+  if(k.trigger==='state'){
+    h+='<div style="margin-top:8px;font-size:12.5px;color:#7b838d">状态变更：选一张工单 + 一条规则，点触发即按规则拼问题并提醒对应角色。</div>';
+    h+='<div class="bar" style="flex-wrap:wrap;margin-top:6px"><select id="scOrder" style="flex:2;min-width:240px"></select><select id="scRule" style="flex:1;min-width:200px"></select></div>';
+  }
+  h+=qhtml;
+  h+='</div>';
+  document.getElementById('skillPanel').innerHTML=h;
+  if(k.trigger==='state'){
+    var so=document.getElementById('scOrder'); so.innerHTML='';
+    TORDERS.forEach(function(o,i){var op=document.createElement('option');op.value=String(i);op.textContent=o.status_cn+' ｜ '+o.work_name+' ｜ '+(o.budget/10000).toFixed(2)+'万';so.appendChild(op);});
+    var sr=document.getElementById('scRule'); sr.innerHTML='';
+    TRULES.forEach(function(r,i){var op=document.createElement('option');op.value=String(i);op.textContent=r.from+' → '+r.to+'（提醒 '+r.role+'）';sr.appendChild(op);});
+  }
+}
+function collectInputs(){
+  var out=[];
+  Array.prototype.forEach.call(document.querySelectorAll('.sin'), function(el){
+    out.push({label: el.getAttribute('data-label'), value: el.value});
+  });
+  return out;
+}
+function collectQs(){
+  var out=[]; var all=document.querySelectorAll('.sq'), chk=document.querySelectorAll('.sqc');
+  Array.prototype.forEach.call(all, function(el,i){ if(chk[i] && chk[i].checked && el.value.trim()){ out.push(el.value.trim()); } });
+  return out;
+}
+function runCompare(){
+  var k=TSEL; if(!k)return;
+  var qs=collectQs();
+  if(!qs.length){ document.getElementById('cmpA').textContent='至少勾一条问题。'; return; }
+  var base={skill_id:k.id,questions:qs,inputs:collectInputs(),
+    role:(document.getElementById('roleSel')||{value:''}).value,
+    scope:(document.getElementById('scopeSel')||{value:''}).value,
+    model:document.getElementById('model').value};
+  function go(el,useDoc){
+    document.getElementById(el).textContent='跑中…（两边同时跑）';
+    var url = useDoc ? '/api/skill/run' : '/api/ask';
+    var payload = useDoc ? Object.assign({},base,{use_doc:true})
+                         : {question:qs.join(NL), model:base.model};
+    return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)})
+      .then(function(r){return r.json();})
+      .then(function(d){document.getElementById(el).textContent=(d.answer||'（空）')+NL+NL+'[工具 '+(d.tool_calls||0)+' 次 / '+((d.elapsed_ms||0)/1000).toFixed(1)+' 秒 / 技能文档 '+(d.doc_chars||0)+' 字]';})
+      .catch(function(e){document.getElementById(el).textContent='失败：'+e;});
+  }
+  go('cmpA', false);
+  go('cmpB', true);
+}
+function runSkill(){
+  var k=TSEL; if(!k)return;
+  var b=document.getElementById('skillGo'); b.disabled=true; b.textContent='技能执行中…';
+  document.getElementById('answer').textContent='技能「'+k.name+'」执行中，会按技能文档把这一组问题一起跑，约 1-2 分钟…';
+  document.getElementById('trace').innerHTML='';document.getElementById('meta').innerHTML='';
+  var qs=collectQs();
+  if(!qs.length){ b.disabled=false; b.textContent='触发这个技能'; document.getElementById('answer').textContent='至少勾一条问题。'; return; }
+  var body={skill_id:k.id,model:document.getElementById('model').value,questions:qs,
+        role:(document.getElementById('roleSel')||{value:''}).value,
+        scope:(document.getElementById('scopeSel')||{value:''}).value,inputs:collectInputs()};
+  if(k.trigger==='state'){
+    var o=TORDERS[parseInt((document.getElementById('scOrder')||{value:'0'}).value,10)]||{};
+    var r=TRULES[parseInt((document.getElementById('scRule')||{value:'0'}).value,10)]||{};
+    body.work_name=o.work_name||''; body.from=r.from||''; body.to=r.to||'';
+  }
+  fetch('/api/skill/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+   .then(function(r){return r.json();})
+   .then(function(d){
+     document.getElementById('answer').textContent=d.answer||'（空）';
+     document.getElementById('trace').innerHTML=(d.trace||[]).map(function(s){
+       var nm=s.kind==='tool'?s.tool:'回答'; var cls=s.kind==='tool'?(s.tool==='run_sql'?'t-db':'t-meta'):'t-ans';
+       return '<details class="step"><summary><span class="tag '+cls+'">'+esc(nm)+'</span><span class="ms">'+(s.ms||0)+' ms</span></summary><pre>'+esc(JSON.stringify(s.args||s.content||'',null,1)).slice(0,4000)+'</pre></details>';
+     }).join('');
+     document.getElementById('meta').innerHTML='技能 '+esc(d.skill||'')+' ｜ 问题 '+(d.questions||0)+' 个 ｜ 技能文档 '+(d.doc_chars||0)+' 字 ｜ 工具 '+(d.tool_calls||0)+' 次 ｜ '+((d.elapsed_ms||0)/1000).toFixed(1)+' 秒';
+   })
+   .catch(function(e){document.getElementById('answer').textContent='请求失败：'+e;})
+   .then(function(){b.disabled=false;b.textContent='触发这个技能';});
+}
+loadTriggers();
+</script>
+</body>
+</html>

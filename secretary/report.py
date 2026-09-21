@@ -95,7 +95,8 @@ def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None,
         for it in inputs:
             head += '  - %s：%s\n' % (it.get('label') or '', it.get('value') or '')
     if work_name:
-        head += ('刚刚发生了一次状态变更：工单「%s」从「%s」变为「%s」。请结合这次变更来答。\n' % (work_name, frm, to))
+        head += ('上游系统推过来一张单据：工单「%s」从「%s」变为「%s」（变更时间见上面的上游数据，'
+                 '**那不是今天，别拿它当统计截止日**）。请结合这次变更来答。\n' % (work_name, frm, to))
     head += ('下面是这个技能要你回答的 %d 个问题，**请合并成一份回答**（不要一问一答地重复），'
              '按技能文档要求的段落与口径来组织：\n' % len(qs))
     user = head + '\n'.join('%d. %s' % (i + 1, q) for i, q in enumerate(qs))
