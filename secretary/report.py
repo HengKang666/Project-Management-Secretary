@@ -59,6 +59,22 @@ def _system():
     ])
 
 
+def list_triggers():
+    """读 skills/技能触发配置.json，并把对应技能文档正文带上，供前端触发台渲染。"""
+    import json as _json
+    p = os.path.join(SKILL_DIR, '技能触发配置.json')
+    try:
+        with open(p, encoding='utf-8') as f:
+            cfg = _json.load(f)
+    except Exception as e:
+        return {'trigger_types': {}, 'skills': [], 'error': str(e)[:200]}
+    docs = {d['name']: d['content'] for d in list_skill_docs()}
+    for s in cfg.get('skills') or []:
+        s['doc_text'] = docs.get(s.get('doc') or '', '')
+        s['has_doc'] = bool(s['doc_text'])
+    return cfg
+
+
 def list_skill_docs():
     """列出 skills/ 下的技能文档（名字 + 标题 + 正文），供页面选用。"""
     out = []

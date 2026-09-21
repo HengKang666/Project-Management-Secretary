@@ -27,7 +27,15 @@
  .ms{float:right;color:#9aa2ab;font-size:12px}
  pre{margin:0;padding:10px;font-size:12px;overflow:auto;max-height:300px;background:#fff;border-top:1px solid #eef0f2;white-space:pre-wrap;word-break:break-all}
  .hint{font-size:12px;color:#9aa2ab;margin-top:8px}
- #report{line-height:1.75;font-size:14.5px}
+ .tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
+.tmod{border:1px solid #e6e8eb;border-radius:8px;padding:10px;background:#fff}
+.tmod-h{font-size:13.5px;margin-bottom:6px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.ttag{font-size:11px;color:#fff;border-radius:3px;padding:1px 7px;white-space:nowrap}
+.t-manual{background:#1a6fd4}.t-form{background:#0f9d58}.t-precheck{background:#e08a00}
+.t-scan{background:#7a5af8}.t-state{background:#c0392b}
+.tq{display:block;width:100%;text-align:left;margin:5px 0;padding:7px 10px;font-size:12.5px;background:#f7f9fc;color:#20242b;border:1px solid #e3e6ea;border-radius:6px;cursor:pointer;line-height:1.45}
+.tq:hover{background:#eaf2fc;border-color:#9cbfe8}
+#report{line-height:1.75;font-size:14.5px}
  #report h3{font-size:15px;margin:16px 0 8px;padding-left:8px;border-left:3px solid #1a6fd4}
  #report h4{font-size:14px;margin:12px 0 6px}
  #report ul,#report ol{margin:6px 0 10px;padding-left:22px}
@@ -47,6 +55,10 @@
 </header>
 <div class="wrap">
   <div>
+    <div class="card" style="margin-bottom:12px">
+      <p class="lbl">技能触发台 —— 每个技能按它自己的触发方式点一下，直接跑真实问题（左栏出答案，右栏出过程）</p>
+      <div id="triggers" class="tgrid"></div>
+    </div>
     <div class="card" style="margin-bottom:12px">
       <p class="lbl">年度缺陷治理计划分析 —— 模拟收到一份「预算分配通知」（本期数字是模拟的，可以直接改；换供电所会重新生成）</p>
       <div class="bar" style="flex-wrap:wrap">
@@ -192,6 +204,41 @@ function collectNotice(){
   n.metrics=(NOTICE&&NOTICE.metrics||[]).map(function(m){ var c={}; for(var k2 in m){ c[k2]=m[k2]; } if(!isNaN(sc[m.key])){c.cur_score=sc[m.key];} return c; });
   return n;
 }
+var TRIGGERS={};
+function loadTriggers(){
+  fetch('/api/triggers').then(function(r){return r.json();}).then(function(d){
+    var tt=d.trigger_types||{}, h='';
+    (d.skills||[]).forEach(function(s){
+      TRIGGERS[s.id]=s;
+      var t=tt[s.trigger]||{label:s.trigger};
+      h+='<div class="tmod"><div class="tmod-h"><b>'+esc(s.name)+'</b>'
+       +'<span class="ttag t-'+esc(s.trigger)+'">'+esc(t.label)+'</span>'
+       +'<span style="color:#9aa2ab;font-size:11.5px">'+esc(s.role||'')+'</span>'
+       +(s.has_doc?'<span style="color:#0f9d58;font-size:11.5px">已挂技能文档</span>':'<span style="color:#e08a00;font-size:11.5px">暂无技能文档</span>')
+       +'</div>';
+      (s.questions||[]).forEach(function(q,i){
+        h+='<button class="tq" data-sid="'+esc(s.id)+'" data-qi="'+i+'">'+esc(q.q)+'</button>';
+      });
+      if(s.note){h+='<div class="hint">'+esc(s.note)+'</div>';}
+      h+='</div>';
+    });
+    document.getElementById('triggers').innerHTML=h;
+  }).catch(function(){});
+}
+function fireTrigger(sid,qi){
+  var s=TRIGGERS[sid]; if(!s)return;
+  var q=(s.questions||[])[qi]; if(!q)return;
+  document.getElementById('q').value=q.q;
+  document.getElementById('skills').value=s.doc_text||'';
+  document.getElementById('skillnote').textContent=s.has_doc?('已挂载技能文档：'+s.doc):'该技能暂无技能文档，这次走通用逻辑（正好用来对照效果）';
+  try{localStorage.setItem('secretary_skills',s.doc_text||'');}catch(e){}
+  ask();
+}
+document.getElementById('triggers').addEventListener('click',function(e){
+  var b=e.target.closest('.tq'); if(!b)return;
+  fireTrigger(b.getAttribute('data-sid'), parseInt(b.getAttribute('data-qi'),10));
+});
+loadTriggers();
 var SKILLS=[];
 function loadSkills(){
   fetch('/api/skills').then(function(r){return r.json();}).then(function(d){
