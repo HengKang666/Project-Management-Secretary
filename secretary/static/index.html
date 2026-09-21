@@ -35,6 +35,12 @@
 .t-scan{background:#7a5af8}.t-state{background:#c0392b}
 .tq{display:block;width:100%;text-align:left;margin:5px 0;padding:7px 10px;font-size:12.5px;background:#f7f9fc;color:#20242b;border:1px solid #e3e6ea;border-radius:6px;cursor:pointer;line-height:1.45}
 .tq:hover{background:#eaf2fc;border-color:#9cbfe8}
+.tihint{background:#f0f7ff;border-left:3px solid #1a6fd4;border-radius:4px;padding:6px 9px;font-size:12px;color:#3c5878;margin:6px 0;line-height:1.55}
+.tgrp{border:1px solid #e6e8eb;border-radius:8px;padding:8px 10px;margin:7px 0;background:#fcfdfe}
+.tgrp-h{font-size:12px;color:#1a6fd4;font-weight:600;margin-bottom:5px}
+.trow{display:flex;gap:8px;align-items:center;margin:4px 0}
+.tlb{min-width:150px;font-size:12.5px;color:#5b6470}
+.trow input{flex:1;padding:6px 9px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px}
 .cmpout{border:1px solid #e6e8eb;border-radius:8px;padding:10px;font-size:12.5px;line-height:1.65;background:#fff;white-space:pre-wrap;max-height:520px;overflow:auto}
 #report{line-height:1.75;font-size:14.5px}
  #report h3{font-size:15px;margin:16px 0 8px;padding-left:8px;border-left:3px solid #1a6fd4}
@@ -251,13 +257,17 @@ function showSkill(){
     h+='<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;color:#1a6fd4">查看这个技能的文档（'+k.doc_text.length+' 字）—— 它才是决定「怎么答」的固定流程</summary>'
      +'<pre style="max-height:280px;font-size:11.5px;background:#fafbfc;border:1px solid #eef0f2;border-radius:6px;padding:8px;margin-top:6px;white-space:pre-wrap">'+esc(k.doc_text)+'</pre></details>';
   }
+  if(t.hint){h+='<div class="tihint">'+esc(t.hint)+'</div>';}
   if(k.inputs && k.inputs.length){
-    h+='<div style="font-size:12.5px;color:#7b838d;margin:8px 0 3px">上游传过来的数据（<b>可以直接改</b>，改了就按你改的算）：</div>';
-    k.inputs.forEach(function(it,i){
-      h+='<div style="display:flex;gap:8px;align-items:center;margin:4px 0">'
-       +'<span style="min-width:140px;font-size:12.5px;color:#5b6470">'+esc(it.label)+'</span>'
-       +'<input class="sin" data-label="'+esc(it.label)+'" value="'+esc(it.value)+'" style="flex:1;padding:6px 9px;font-size:12.5px;border:1px solid #e3e6ea;border-radius:6px">'
-       +'</div>';
+    var groups=[], gmap={};
+    k.inputs.forEach(function(it){ var g=it.group||'上游数据'; if(!gmap[g]){gmap[g]=[];groups.push(g);} gmap[g].push(it); });
+    groups.forEach(function(g){
+      h+='<div class="tgrp"><div class="tgrp-h">'+esc(g)+'</div>';
+      gmap[g].forEach(function(it){
+        h+='<div class="trow"><span class="tlb">'+esc(it.label)+'</span>'
+         +'<input class="sin" data-label="'+esc(it.label)+'" value="'+esc(it.value)+'"></div>';
+      });
+      h+='</div>';
     });
   }
   if(k.trigger==='state'){
