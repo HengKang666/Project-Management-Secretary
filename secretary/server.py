@@ -277,9 +277,11 @@ class H(BaseHTTPRequestHandler):
         channel = (data.get('channel') or '').strip() or None
         # 多轮上下文轮数：不传用配置默认（SECRETARY_HISTORY_TURNS，默认 5）；传 0 = 本次不用上下文
         history_turns = data.get('history_turns')
+        # want_page：显式要分析页面。不传时只有「分析」类问题才生成（查数题不生成，保持快）。
+        want_page = bool(data.get('want_page'))
         client_ip = self.client_address[0] if self.client_address else None
         try:
-            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile,
+            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page,
                           session_id=session_id, user_id=user_id, user_code=user_code,
                           client_ip=client_ip, channel=channel, history_turns=history_turns)
         except Exception as e:

@@ -165,3 +165,5 @@ HTTP_TIMEOUT = 120
 # 分析题的「分析页面」：判出题型为分析时，额外调一次模型把结论渲染成单页 HTML 数据大屏。
 # 设 SECRETARY_PAGE=0 可关掉（关掉后 /api/ask 不再返回 page_html，回答不受影响）。
 PAGE_ON = (os.environ.get('SECRETARY_PAGE') or ENV.get('SECRETARY_PAGE') or '1').strip().lower() not in ('0', 'false', 'no')
+# 生成分析页面用的模型：页面是纯前端代码活，用快档就够，实测比旗舰快一倍（48.7s→23.4s）
+PAGE_MODEL = (os.environ.get('SECRETARY_PAGE_MODEL') or ENV.get('SECRETARY_PAGE_MODEL') or 'qwen3.8-flash').strip()

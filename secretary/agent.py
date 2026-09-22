@@ -101,6 +101,7 @@ COMPLETE_SYSTEM = (
     '   - 「分析」：原因、趋势、对比，以及一切「有没有 / 是不是 / 合不合理」的判定题 ——'
      '因为它们必须先有标准才能下结论。\n'
     '     例：「今天为什么比昨天多」「今天有没有项目逾期」「线损率是不是偏高」「这笔钱花得合不合理」→ 分析。\n'
+    '     问「先办哪几张 / 该怎么处理 / 下一步做什么 / 给个建议」也算分析 —— 要给排序或行动建议就必须先有标准。\n'
     '   - 「查数」：一个数、一组数、清单、排名、占比、多少个、是什么；取到数就能回答，不依赖任何标准。\n'
     '     例：「线损率是多少」「有多少个项目」「排名前五的所」「全市台区总共有多少个」→ 查数。\n'
     '   - 拿不准时判「查数」（判成分析会多查一次规则库，代价更高）。\n'
@@ -112,12 +113,13 @@ COMPLETE_SYSTEM = (
 )
 
 
-# 知识库里「分析规则」这篇文档的文档名（在检索面索引 r57xtq9ypm 内）。
-# 只认这一个文档名的切片 —— 否则补全规则会被当成判断标准，等于自己编标准。
-ANALYSIS_DOC = '分析规则'
+# 知识库里这两篇文档的名字（都在检索面索引 r57xtq9ypm 内）：
+#   问法归一 = 残缺问法 -> 标准口径；分析规则 = 判断标准。
+# 只认这两个文档名的切片 —— 否则别的文档会被当成判断标准，等于自己编标准。
+ANALYSIS_DOCS = ('问法归一', '分析规则')
 
 
-def analysis_rules(topic, question, top_k=4, limit=1500):
+def analysis_rules(topic, question, top_k=8, limit=1500):
     """取「分析规则」切片。**只给分析类问题用**，查数类不调它。
 
     检索词优先用判出来的 topic（挑明了要分析什么），没有才退回原问题。
@@ -128,7 +130,8 @@ def analysis_rules(topic, question, top_k=4, limit=1500):
         return []
     try:
         r = tools_kb.kb_search(q, top_k=top_k, limit=limit)
-        return [n for n in (r.get('nodes') or []) if ANALYSIS_DOC in (n.get('doc_name') or '')]
+        return [n for n in (r.get('nodes') or [])
+                if any(d in (n.get('doc_name') or '') for d in ANALYSIS_DOCS)]
     except Exception:
         return []
 
@@ -277,7 +280,8 @@ PAGE_SYSTEM = (
     '- HTML 总行数控制在 240 行以内。\n- 代码必须可直接保存并运行。\n'
     '\n## 生成策略\n'
     '- 优先保证结构清晰、渲染稳定、代码简洁。\n- 减少冗余标签、重复样式和无意义包装层。\n'
-    '- 仅输出最终 HTML 结果。'
+    '- 仅输出最终 HTML 结果。\n'
+    '- 图必须有数据：某类图**没有数据时不要保留空图容器**，改用卡片或表格展示 —— 空图比没有图更糟。'
 )
 
 
@@ -300,7 +304,7 @@ def _strip_html(out):
     return t[i:].strip()
 
 
-def render_page(content, model=None, max_tokens=6000):
+def render_page(content, extra='', model=None, max_tokens=6000):
     """分析结论 -> 单页 HTML 数据大屏。**独立的一次模型调用，与作答那次不共用。**
 
     它是附属产物：任何异常都只返回空串，绝不能因为它把回答搞丢。
@@ -308,10 +312,12 @@ def render_page(content, model=None, max_tokens=6000):
     text = (content or '').strip()
     if not text or '澄清话术' in text:
         return ''
+    if extra:
+        text += ('\n\n【这次查到的原始数据（可直接用来作图，数字不要改、不要新增）】\n' + extra)
     try:
         resp = _chat([{'role': 'system', 'content': PAGE_SYSTEM},
                       {'role': 'user', 'content': text}],
-                     model or config.MODEL, use_tools=False, max_tokens=max_tokens)
+                     model or config.PAGE_MODEL, use_tools=False, max_tokens=max_tokens)
         out = (resp['choices'][0]['message'].get('content') or '')
     except Exception as e:
         print('[agent] 分析页面渲染失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
@@ -319,7 +325,7 @@ def render_page(content, model=None, max_tokens=6000):
     return _strip_html(out)
 
 
-def ask(question, model=None, max_steps=None, profile=None,
+def ask(question, model=None, max_steps=None, profile=None, want_page=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None):
     """question = 用户的原话（不需要上游预处理）。
@@ -514,12 +520,22 @@ def ask(question, model=None, max_steps=None, profile=None,
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
             messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _trim(o['name'], o['result'])})
+    loop_end = time.time()
     # 分析题的附加产物：**另一次模型调用**把结论渲染成单页 HTML 数据大屏。
     # 与作答那次不共用；同步生成、同步随本响应返回。页面失败只返回空串，回答照旧。
     page_html = ''
-    if qtype == '分析' and answer and config.PAGE_ON:
+    if answer and config.PAGE_ON and (qtype == '分析' or want_page):
+        # 页面只按「回答文字」生成时，文字里没有明细就画不出图（会出现空图区）。
+        # 所以把这次 run_sql 查到的行一起给页面模型 —— 它有数据可画，才画得出。
+        rows_ctx = []
+        for _t in trace:
+            if _t.get('kind') == 'tool' and _t.get('tool') == 'run_sql':
+                _res = _t.get('result') or {}
+                if _res.get('rows'):
+                    rows_ctx.append({'rows': _res['rows'][:40]})
+        extra = json.dumps(rows_ctx, ensure_ascii=False, default=str)[:6000] if rows_ctx else ''
         t_page = time.time()
-        page_html = render_page(answer, model)
+        page_html = render_page(answer, extra=extra, model=model)
         trace.append({'seq': len(trace) + 1, 'kind': 'page', 'tool': 'render_page',
                       'ms': int((time.time() - t_page) * 1000),
                       'result': {'ok': bool(page_html), 'chars': len(page_html),
@@ -556,7 +572,8 @@ def ask(question, model=None, max_steps=None, profile=None,
         'timings': {
             'namefix_ms': namefix_ms,
             'completion_ms': done['ms'],
-            'loop_ms': int((time.time() - t_loop) * 1000),
+            'loop_ms': int((loop_end - t_loop) * 1000),
+            'page_ms': int((time.time() - loop_end) * 1000) if page_html else 0,
             'total_ms': int((time.time() - t_all) * 1000),
         },
         'db_query_count': len(db_calls),
