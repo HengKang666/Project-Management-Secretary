@@ -7,6 +7,9 @@
 全部在一个模型循环里由模型自己排顺序，代码不写业务流程。
 """
 import concurrent.futures
+import hashlib
+import threading
+import uuid
 import json
 import re
 import ssl
@@ -233,7 +236,41 @@ def _strip_html(out):
     return t[i:].strip()
 
 
-def render_page(content, extra='', model=None, max_tokens=6000):
+_PAGE_CACHE = {}          # md5(答案+数据) -> 已生成的页面 HTML
+_PAGE_CACHE_MAX = 50
+_PAGES = {}               # token -> {'html':…, 'done':bool}  异步生成的页面
+
+
+def _page_key(content, extra, cache_key=None):
+    # 键优先用「问题 + 业务日期 + 范围」：模型每次写的 SQL 与措辞会有出入，
+    # 拿答案文字当键几乎永远不命中；而同一业务日、同一个问题，页面本来就该是同一张。
+    if cache_key:
+        return hashlib.md5(cache_key.encode('utf-8')).hexdigest()
+    return hashlib.md5((content + '\x00' + (extra or '')).encode('utf-8')).hexdigest()
+
+
+def page_get(token):
+    """异步取页面：{'done':False} 表示还在生成。"""
+    return _PAGES.get(token)
+
+
+def render_page_async(content, extra='', model=None, max_tokens=6000, cache_key=None):
+    """后台线程生成页面，立刻返回 token。取用见 page_get()。"""
+    token = uuid.uuid4().hex
+    _PAGES[token] = {'done': False, 'html': ''}
+
+    def work():
+        try:
+            _PAGES[token] = {'done': True,
+                             'html': render_page(content, extra, model, max_tokens, cache_key)}
+        except Exception as e:                      # noqa: BLE001
+            _PAGES[token] = {'done': True, 'html': '', 'error': str(e)[:200]}
+
+    threading.Thread(target=work, daemon=True, name='page-%s' % token[:6]).start()
+    return token
+
+
+def render_page(content, extra='', model=None, max_tokens=6000, cache_key=None):
     """分析结论 -> 单页 HTML 数据大屏。**独立的一次模型调用，与作答那次不共用。**
 
     它是附属产物：任何异常都只返回空串，绝不能因为它把回答搞丢。
@@ -241,6 +278,9 @@ def render_page(content, extra='', model=None, max_tokens=6000):
     text = (content or '').strip()
     if not text or '澄清话术' in text:
         return ''
+    key = _page_key(text, extra, cache_key)
+    if key in _PAGE_CACHE:            # 同样的答案+同样的数据 = 同一张页面，不必再花一次模型调用
+        return _PAGE_CACHE[key]
     if extra:
         text += ('\n\n【这次查到的原始数据（可直接用来作图，数字不要改、不要新增）】\n' + extra)
     try:
@@ -251,10 +291,16 @@ def render_page(content, extra='', model=None, max_tokens=6000):
     except Exception as e:
         print('[agent] 分析页面渲染失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
         return ''
-    return _strip_html(out)
+    html = _strip_html(out)
+    if html:
+        if len(_PAGE_CACHE) >= _PAGE_CACHE_MAX:
+            _PAGE_CACHE.clear()
+        _PAGE_CACHE[key] = html
+    return html
 
 
 def ask(question, model=None, max_steps=None, profile=None, want_page=False, today=None, scope=None,
+        page_async=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None):
     """question = 用户的原话（不需要上游预处理）。
@@ -441,6 +487,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 分析题的附加产物：**另一次模型调用**把结论渲染成单页 HTML 数据大屏。
     # 与作答那次不共用；同步生成、同步随本响应返回。页面失败只返回空串，回答照旧。
     page_html = ''
+    page_token = ''
     if answer and config.PAGE_ON and (qtype == '分析' or want_page):
         # 页面只按「回答文字」生成时，文字里没有明细就画不出图（会出现空图区）。
         # 所以把这次 run_sql 查到的行一起给页面模型 —— 它有数据可画，才画得出。
@@ -452,11 +499,22 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                     rows_ctx.append({'rows': _res['rows'][:40]})
         extra = json.dumps(rows_ctx, ensure_ascii=False, default=str)[:6000] if rows_ctx else ''
         t_page = time.time()
-        page_html = render_page(answer, extra=extra, model=model)
-        trace.append({'seq': len(trace) + 1, 'kind': 'page', 'tool': 'render_page',
-                      'ms': int((time.time() - t_page) * 1000),
-                      'result': {'ok': bool(page_html), 'chars': len(page_html),
-                                 'reason': '已生成分析页面' if page_html else '未生成（模型未给出 HTML 或调用失败）'}})
+        page_token = ''
+        # 页面缓存键：同一业务日 + 同一个问题 + 同一个范围 = 同一张页面
+        pkey = 'q=%s|d=%s|s=%s' % (question, today or time.strftime('%Y-%m-%d'), scope or '')
+        if page_async:
+            # 异步：先把答案返回，页面在后台生成，避免 30–55s 的页面把回答堵住。
+            page_token = render_page_async(answer, extra=extra, model=model, cache_key=pkey)
+            trace.append({'seq': len(trace) + 1, 'kind': 'page', 'tool': 'render_page',
+                          'ms': int((time.time() - t_page) * 1000),
+                          'result': {'ok': True, 'async': True, 'token': page_token,
+                                     'reason': '页面转到后台生成，用 GET /api/page?token= 取'}})
+        else:
+            page_html = render_page(answer, extra=extra, model=model, cache_key=pkey)
+            trace.append({'seq': len(trace) + 1, 'kind': 'page', 'tool': 'render_page',
+                          'ms': int((time.time() - t_page) * 1000),
+                          'result': {'ok': bool(page_html), 'chars': len(page_html),
+                                     'reason': '已生成分析页面' if page_html else '未生成（模型未给出 HTML 或调用失败）'}})
     DB_TOOLS = ('run_sql',)
     db_calls = [t for t in trace if t.get('tool') in DB_TOOLS]
     sql_calls = [t for t in trace if t.get('tool') == 'run_sql']
@@ -482,6 +540,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         'qtype': qtype,
         'analysis_rules_hit': len([t for t in trace if t.get('tool') == 'kb_search' and t.get('kind') == 'tool']),
         'page_html': page_html,
+        'page_token': page_token,        # 异步模式下用它取页面：GET /api/page?token=…
         'completed_question': question,   # 不再改写问题：就是用户原话（只做过地名/时间补全）
         'answer': answer,
         'trace': trace,

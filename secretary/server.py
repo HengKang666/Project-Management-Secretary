@@ -194,6 +194,18 @@ class H(BaseHTTPRequestHandler):
         elif path == '/api/stats':
             # 记录库概览：问答量 / 缺口数 / 未核实数 / 纠错命中数
             self._handle_stats()
+        elif path == '/api/page':
+            # 取异步生成的页面：token 未就绪返 202，就绪返 HTML，失败/无效返 404
+            tok = (self._query().get('token') or '').strip()
+            got = agent.page_get(tok) if tok else None
+            if not got:
+                self._send(404, 'page token not found', 'text/plain')
+            elif not got.get('done'):
+                self._send(202, 'page generating', 'text/plain')
+            elif got.get('html'):
+                self._send(200, got['html'], 'text/html')
+            else:
+                self._send(500, 'page failed: %s' % got.get('error', ''), 'text/plain')
         elif path.startswith('/api/kb/'):
             # 知识库（阿里云百炼）：列表 / 详情 / 文档 / 上传 / 删除，实现见 kb_api.py
             self._handle_kb('GET')
@@ -280,12 +292,14 @@ class H(BaseHTTPRequestHandler):
         history_turns = data.get('history_turns')
         # want_page：显式要分析页面。不传时只有「分析」类问题才生成（查数题不生成，保持快）。
         want_page = bool(data.get('want_page'))
+        # page_mode: 'sync'（默认，页面随答案一起回）/ 'async'（先把答案回来，页面后台生成，用 /api/page 取）
+        page_async = (data.get('page_mode') or '').strip().lower() == 'async'
         # today：业务上的「今天」，**由上游传**（定时任务/业务系统知道业务日期）。
         # 不传才退回服务器日期；停留天数、同比、"截至今天"全按它算。
         today = (data.get('today') or data.get('business_date') or '').strip() or None
         client_ip = self.client_address[0] if self.client_address else None
         try:
-            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page, today=today,
+            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page, today=today, page_async=page_async,
                           session_id=session_id, user_id=user_id, user_code=user_code,
                           client_ip=client_ip, channel=channel, history_turns=history_turns)
         except Exception as e:
