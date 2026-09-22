@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知识库控制台 · 智能问数</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --line:#e3e6ea; --text:#1f2329; --muted:#6b7280;
+    --brand:#185fa5; --brand-weak:#e6f1fb;
+    --ok:#0f6e56; --ok-bg:#e1f5ee; --warn:#854f0b; --warn-bg:#faeeda; --err:#a32d2d; --err-bg:#fcebeb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.6 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 24px;
+         display:flex;align-items:center;gap:14px;flex-wrap:wrap;position:sticky;top:0;z-index:5}
+  header h1{font-size:16px;font-weight:500;margin:0}
+  header a{color:var(--brand);text-decoration:none;font-size:13px}
+  main{max-width:1180px;margin:0 auto;padding:20px 24px 60px;display:grid;
+       grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card h2{font-size:14px;font-weight:500;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+  .card h2 .n{width:20px;height:20px;border-radius:50%;background:var(--brand-weak);color:var(--brand);
+              font-size:12px;display:grid;place-items:center}
+  .full{grid-column:1/-1}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+  input,select,button{font:inherit;color:inherit}
+  input[type=text],input[type=number],select{width:100%;padding:8px 10px;border:1px solid var(--line);
+      border-radius:8px;background:#fff}
+  button{padding:8px 14px;border:1px solid var(--brand);background:var(--brand);color:#fff;
+         border-radius:8px;cursor:pointer}
+  button.ghost{background:#fff;color:var(--brand)}
+  button.danger{border-color:var(--err);background:#fff;color:var(--err)}
+  button.sm{padding:4px 10px;font-size:12px;border-radius:6px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .msg{margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px;display:none;white-space:pre-wrap}
+  .msg.ok{display:block;background:var(--ok-bg);color:var(--ok)}
+  .msg.err{display:block;background:var(--err-bg);color:var(--err)}
+  .msg.info{display:block;background:var(--warn-bg);color:var(--warn)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:400;font-size:12px}
+  .pill{font-size:11px;padding:2px 7px;border-radius:20px;background:#eef1f4;color:var(--muted);white-space:nowrap}
+  .pill.ok{background:var(--ok-bg);color:var(--ok)}
+  .pill.err{background:var(--err-bg);color:var(--err)}
+  .pill.run{background:var(--warn-bg);color:var(--warn)}
+  .hm{white-space:nowrap}
+  .kv{display:grid;grid-template-columns:110px 1fr;gap:6px 12px;font-size:13px}
+  .kv .k{color:var(--muted)}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>知识库控制台</h1>
+  <span class="muted" style="font-size:12px">本页 → 本地服务(8200) → 阿里云百炼（AK/SK 只存在服务端，前端拿不到）</span>
+  <span id="status" class="pill">未连接</span>
+  <a href="/" style="margin-left:auto">← 返回智能问数</a>
+</header>
+
+<main>
+  <section class="card full">
+    <h2><span class="n">1</span>查看知识库</h2>
+    <div class="row">
+      <button class="ghost" id="btnList">刷新列表</button>
+      <button class="ghost" id="btnHealth">连通性自检</button>
+    </div>
+    <div id="listBox" style="margin-top:12px"></div>
+    <div id="msgList" class="msg"></div>
+  </section>
+
+  <section class="card full">
+    <h2><span class="n">2</span>知识库详情</h2>
+    <div class="row">
+      <input type="text" id="detailId" placeholder="知��库 ID（从上面列表点「详情」自动填入）" style="flex:2;min-width:240px">
+      <button class="ghost" id="btnDetail">查看详情</button>
+    </div>
+    <div id="detailBox" style="margin-top:12px"></div>
+    <div id="msgDetail" class="msg"></div>
+  </section>
+
+  <section class="card full">
+    <h2><span class="n">3</span>知识库里的文档</h2>
+    <div class="row">
+      <input type="text" id="docIndexId" placeholder="知识库 ID" style="flex:2;min-width:240px">
+      <select id="docStatus" style="flex:1;min-width:150px">
+        <option value="">全部状态</option>
+        <option value="FINISH">FINISH · 已可检索</option>
+        <option value="RUNNING">RUNNING · 索引构建中</option>
+        <option value="INSERT_ERROR">INSERT_ERROR · 导入失败</option>
+      </select>
+      <button class="ghost" id="btnDocs">刷新文档</button>
+    </div>
+    <div id="docBox" style="margin-top:12px"></div>
+    <div id="msgDocs" class="msg"></div>
+  </section>
+
+  <section class="card full">
+    <h2><span class="n">4</span>上传文档到知识库</h2>
+    <div class="row">
+      <input type="text" id="upIndexId" placeholder="知识库 ID" style="flex:2;min-width:240px">
+      <input type="file" id="upFile" style="flex:2;min-width:240px">
+      <button id="btnUpload">上传</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:8px">
+      上传后先在云端解析、再提交索引任务。索引是异步构建的（小文件通常几分钟），完成后刷新文档列表即可看到 FINISH。
+      同名文档会自动跳过，不会重复入库。
+    </div>
+    <div id="msgUpload" class="msg"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+/* 同源：知识库接口就挂在问数服务本身上（8200），所以不用写 BASE */
+const BASE = '';
+
+function say(el, text, type='info') { const n=$(el); n.className='msg '+type; n.textContent=text; }
+function clear(el){ const n=$(el); n.className='msg'; n.textContent=''; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function statusPill(s){
+  const v = String(s||'').toUpperCase();
+  const cls = v==='FINISH' ? 'ok' : ['INSERT_ERROR','PARSE_FAILED','FAILED'].includes(v) ? 'err'
+            : ['RUNNING','PENDING','DOC_PARSING'].includes(v) ? 'run' : '';
+  const label = v==='FINISH' ? 'FINISH · 已可检索'
+              : v==='RUNNING' ? 'RUNNING · 索引构建中'
+              : v==='INSERT_ERROR' ? 'INSERT_ERROR · 导入失败' : (s||'-');
+  return `<span class="pill ${cls}">${label}</span>`;
+}
+
+/* 统一的请求封装：本服务的错误体是 {error} 或 {code,message,hint}，
+   不像 FastAPI 那样包在 detail 里，这里两种都认。 */
+async function api(path, opts={}) {
+  const res = await fetch(BASE + path, opts);
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = text; }
+  if (!res.ok) {
+    const d = (data && (data.detail || data));
+    let msg;
+    if (d && typeof d === 'object') {
+      msg = '[' + (d.code || res.status) + '] ' + (d.message || d.error || text);
+      if (d.hint) msg += '\n\n' + d.hint;
+    } else { msg = (typeof d === 'string' ? d : text); }
+    throw new Error(msg);
+  }
+  return data;
+}
+
+// ---- 1 列表 ----
+$('btnList').onclick = async () => {
+  say('msgList','加载中…');
+  try {
+    const d = await api('/api/kb/indices?page_size=50');
+    if (!d.indices.length) {
+      $('listBox').innerHTML = '<div class="muted">该业务空间下暂无知识库</div>';
+      say('msgList','共 0 个知识库','info'); return;
+    }
+    $('listBox').innerHTML = `<table><thead><tr>
+      <th>知识库 ID</th><th>名称</th><th>向量模型</th><th>切片</th><th></th></tr></thead><tbody>` +
+      d.indices.map(i=>`<tr>
+        <td style="font-family:monospace">${esc(i.index_id)}</td>
+        <td>${esc(i.name)}</td>
+        <td>${esc(i.embedding_model)||'-'}</td>
+        <td>${i.chunk_size||'-'} / ${i.overlap_size||'-'}</td>
+        <td class="hm">
+          <button class="ghost sm" onclick="useIndex('${i.index_id}')">选用</button>
+          <button class="ghost sm" onclick="showDetail('${i.index_id}')">详情</button>
+        </td></tr>`).join('') + '</tbody></table>';
+    say('msgList', `共 ${d.total_count} 个知识库`, 'ok');
+  } catch(e) { say('msgList', '✗ ' + e.message, 'err'); }
+};
+
+window.useIndex = id => { $('detailId').value = id; $('docIndexId').value = id; $('upIndexId').value = id; };
+window.showDetail = id => { $('detailId').value = id; $('btnDetail').click(); };
+
+// ---- 2 详情 ----
+$('btnDetail').onclick = async () => {
+  const id = $('detailId').value.trim();
+  if (!id) return say('msgDetail','请填写知识库 ID','err');
+  say('msgDetail','加载中…');
+  try {
+    const d = await api(`/api/kb/indices/${encodeURIComponent(id)}`);
+    const st = d.document_stats || {};
+    $('detailBox').innerHTML = `<div class="kv">
+      <div class="k">知识库 ID</div><div style="font-family:monospace">${esc(d.index_id)}</div>
+      <div class="k">名称</div><div>${esc(d.name)}</div>
+      <div class="k">描述</div><div>${esc(d.description) || '<span class="muted">（无）</span>'}</div>
+      <div class="k">向量模型</div><div>${esc(d.embedding_model)||'-'}</div>
+      <div class="k">排序模型</div><div>${esc(d.rerank_model)||'-'}　阈值 ${d.rerank_min_score??'-'}</div>
+      <div class="k">切片参数</div><div>chunk=${d.chunk_size??'-'}　overlap=${d.overlap_size??'-'}</div>
+      <div class="k">文档总数</div><div><b>${d.document_total}</b></div>
+      <div class="k">按状态</div><div>
+        已可检索 ${st.finish??'-'}　构建中 ${st.running??'-'}　
+        失败 ${st.insert_error??'-'}　已删除 ${st.deleted??'-'}</div>
+    </div>`;
+    clear('msgDetail');
+  } catch(e) { $('detailBox').innerHTML=''; say('msgDetail','✗ ' + e.message, 'err'); }
+};
+
+// ---- 3 文档 ----
+$('btnDocs').onclick = async () => {
+  const id = $('docIndexId').value.trim();
+  if (!id) return say('msgDocs','请填写知识库 ID','err');
+  say('msgDocs','加载中…');
+  const st = $('docStatus').value;
+  try {
+    const d = await api(`/api/kb/indices/${encodeURIComponent(id)}/documents?page_size=50` + (st?`&status=${st}`:''));
+    if (!d.documents.length) {
+      $('docBox').innerHTML = '<div class="muted">没有符合条件的文档</div>';
+      say('msgDocs','共 0 个','info'); return;
+    }
+    $('docBox').innerHTML = `<table><thead><tr>
+      <th>file_id</th><th>名称</th><th>状态</th><th>大小</th><th></th></tr></thead><tbody>` +
+      d.documents.map(x=>`<tr>
+        <td style="font-family:monospace">${esc(x.file_id)}</td>
+        <td>${esc(x.name)}</td>
+        <td>${statusPill(x.status)}</td>
+        <td>${x.size==null?'-':(x.size/1024).toFixed(1)+' KB'}</td>
+        <td class="hm"><button class="danger sm" onclick="delDoc('${id}','${x.file_id}')">删除</button></td>
+      </tr>`).join('') + '</tbody></table>';
+    say('msgDocs', `共 ${d.total_count} 个文档` + (d.documents.some(x=>String(x.status).toUpperCase()==='RUNNING')
+        ? '\n有文档正在构建索引，这是正常的，稍后刷新即可。' : ''), 'ok');
+  } catch(e) { say('msgDocs','✗ ' + e.message,'err'); }
+};
+
+window.delDoc = async (indexId, fileId) => {
+  if (!confirm(`确认从知识库删除 ${fileId} ？此操作不可逆。`)) return;
+  try {
+    const r = await api(`/api/kb/indices/${encodeURIComponent(indexId)}/documents/${encodeURIComponent(fileId)}`,
+                        {method:'DELETE'});
+    say('msgDocs', `✓ 已删除：${(r.deleted||[]).join(', ')||'（无）'}\n注意：数据连接里的源文件仍然存在。`, 'ok');
+    $('btnDocs').click();
+  } catch(e) { say('msgDocs','✗ ' + e.message,'err'); }
+};
+
+// ---- 4 上传 ----
+$('btnUpload').onclick = async () => {
+  const id = $('upIndexId').value.trim();
+  const f = $('upFile').files[0];
+  if (!id) return say('msgUpload','请填写知识库 ID','err');
+  if (!f) return say('msgUpload','请选择文件','err');
+  const fd = new FormData(); fd.append('file', f);
+  say('msgUpload','上传中…（会先在云端解析，小文件通常几十秒）');
+  try {
+    const r = await api(`/api/kb/indices/${encodeURIComponent(id)}/documents`, {method:'POST', body:fd});
+    if (r.skipped) {
+      say('msgUpload', '⚠ ' + r.message, 'info');
+    } else {
+      say('msgUpload',
+        `✓ 上传完成\nfile_id : ${r.file_id}\n大小    : ${(r.size/1024).toFixed(1)} KB\n` +
+        `解析    : ${r.parse_status}\n索引任务: ${r.job_id || '（未提交）'}\n\n${r.message}`, 'ok');
+      $('docIndexId').value = id;
+      $('btnDocs').click();
+    }
+  } catch(e) { say('msgUpload','✗ ' + e.message,'err'); }
+};
+
+// ---- 自检 ----
+$('btnHealth').onclick = async () => {
+  say('msgList','自检中…');
+  try {
+    const d = await api('/api/kb/health');
+    if (d.ok) {
+      $('status').textContent = '已连接';
+      $('status').className = 'pill ok';
+      say('msgList', d.hint || `✓ 连通，业务空间下共 ${d.index_total} 个知识库。`, d.hint ? 'info' : 'ok');
+    } else {
+      $('status').textContent = '异常';
+      $('status').className = 'pill err';
+      say('msgList', `✗ ${d.diagnosis}\n\n${d.hint || ''}`, 'err');
+    }
+  } catch(e) {
+    $('status').textContent = '未连接';
+    $('status').className = 'pill err';
+    say('msgList','✗ ' + e.message,'err');
+  }
+};
+
+// 打开页面就自检一次，让"未配置/权限不对"一眼可见
+$('btnHealth').click();
+</script>
+</body>
+</html>

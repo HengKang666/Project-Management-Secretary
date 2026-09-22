@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""演示服务：GET / 页面、/skills 技能触发台、/health、/api/sessions、/api/history；
-POST /api/ask、/api/feedback、/api/skill/run。标准库实现，零额外依赖。
+"""演示服务：GET / 页面、/kb 知识库页、/skills 技能触发台、/health、/api/sessions、/api/history；
+POST /api/ask、/api/feedback、/api/skill/run、/api/kb/**；DELETE /api/kb/**。标准库实现，零额外依赖。
 
 问答会自动落库到 agent_data（会话/消息/执行明细），历史接口从这里读。
 落库由 qa_log.py 负责，**失败不影响问答**。
+
+知识库（阿里云百炼）那组接口走 kb_api.py —— 那是**附属能力**，
+SDK 没装 / 凭据没配都只影响它自己，不影响问答主链路。
 """
 import json
 import os
@@ -11,7 +14,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import agent
 import tools_asr
@@ -48,6 +51,24 @@ def _preheat():
                   % (type(e).__name__, e), flush=True)
     threading.Thread(target=work, daemon=True, name='namefix-preheat').start()
 
+    def warm_semantic():
+        """预热语义字典（表目录/字段/样例）与提示词缓存。
+
+        为什么需要：`semantic._ensure()` 首建要跑一批字典查询 + 逐表取 3 行样例，
+        实测约 4 秒。它虽然每进程只建一次，但**原先启动没预热它**，
+        于是「第一个提问的人」要白等这 4 秒。放后台线程提前建好。
+        """
+        try:
+            import semantic
+            t0 = time.time()
+            semantic.warm()
+            print('[启动] 语义字典就绪（表目录/字段/提示词，耗时 %.1fs）'
+                  % (time.time() - t0), flush=True)
+        except Exception as e:                    # noqa: BLE001
+            print('[启动] 语义字典预热异常（不影响服务运行，首个请求会补建）：%s: %s'
+                  % (type(e).__name__, e), flush=True)
+    threading.Thread(target=warm_semantic, daemon=True, name='semantic-preheat').start()
+
 
 def _lan_ips():
     """本机的局域网地址，打印出来直接发给同事。"""
@@ -81,17 +102,19 @@ class H(BaseHTTPRequestHandler):
 
     @staticmethod
     def _health():
-        """ok 只说明服务活着；name_fix / qa_log 才说明两个「附属能力」动没动。
+        """ok 只说明服务活着；name_fix / qa_log / kb 才说明三个「附属能力」动没动。
 
-        这两个都可能静默失效：
+        这几个都可能静默失效：
         - name_fix：词典默认从 agent_data 的 t_nc_* 表读（SECRETARY_LEXICON=db），
                     表没建 / 表是空的 / 连不上 → 错字纠正静默不生效；
                     改成 file 模式时，则是 libs 下的 data/ 缺失
         - qa_log  ：记录库没建表 / 连不上 → 问答照答，但对话记录静默不落库
+        - kb      ：知识库的 SDK 没装 / 凭据没配 → /api/kb/** 全返 503（**不连云**，
+                    只看依赖与配置；真正的连通性用 GET /api/kb/health 检查）
         不报出来就没人发现得了，所以都在这里暴露，并带上各自的 _source。
         """
         out = {'ok': True, 'model': agent.config.MODEL}
-        for mod, key in (('name_fix', 'name_fix'), ('qa_log', 'qa_log')):
+        for mod, key in (('name_fix', 'name_fix'), ('qa_log', 'qa_log'), ('kb_api', 'kb')):
             try:
                 m = __import__(mod)
                 st = m.status()
@@ -171,11 +194,22 @@ class H(BaseHTTPRequestHandler):
         elif path == '/api/stats':
             # 记录库概览：问答量 / 缺口数 / 未核实数 / 纠错命中数
             self._handle_stats()
+        elif path.startswith('/api/kb/'):
+            # 知识库（阿里云百炼）：列表 / 详情 / 文档 / 上传 / 删除，实现见 kb_api.py
+            self._handle_kb('GET')
+        elif path in ('/kb', '/kb.html'):
+            # 知识库控制台页面（上传/删除文档，给同事用）
+            with open(os.path.join(HERE, 'static', 'kb.html'), encoding='utf-8') as f:
+                self._send(200, f.read(), 'text/html')
         else:
             self._send(404, 'not found', 'text/plain')
 
     def do_POST(self):
         path = self.path.split('?')[0]
+        if path.startswith('/api/kb/'):
+            # 上传文档：multipart/form-data 与裸二进制都支持（见 kb_api._upload）
+            self._handle_kb('POST')
+            return
         if path == '/api/asr':
             self._handle_asr()
             return
@@ -349,6 +383,38 @@ class H(BaseHTTPRequestHandler):
         r['saved_to'] = save_to
         r['bytes'] = len(raw)
         self._send(200, json.dumps(r, ensure_ascii=False, default=str), 'application/json')
+
+    # ------------------------------------------------ 知识库（阿里云百炼）
+
+    def do_DELETE(self):
+        path = self.path.split('?')[0]
+        if path.startswith('/api/kb/'):
+            self._handle_kb('DELETE')
+            return
+        self._send(404, 'not found', 'text/plain')
+
+    def _handle_kb(self, method):
+        """把所有 /api/kb/** 交给 kb_api 处理。
+
+        知识库是**附属能力**：SDK 没装 / 凭据没配 / 连不上云端，
+        都只影响这一组接口，**绝不拖垮问答主链路**（所以这里再包一层 try）。
+        """
+        try:
+            import kb_api
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            n = int(self.headers.get('Content-Length') or 0)
+            body = self.rfile.read(n) if n else b''
+            headers = {k.lower(): v for k, v in self.headers.items()}
+            r = kb_api.dispatch(method, unquote(self.path.split('?')[0]), q, headers, body)
+        except Exception as e:                  # noqa: BLE001
+            self._send_json({'error': '%s: %s' % (type(e).__name__, e)}, 503)
+            return
+        if r is None:
+            self._send_json({'error': 'not found'}, 404)
+            return
+        status, payload = r
+        self._send(status, json.dumps(payload, ensure_ascii=False, default=str),
+                   'application/json')
 
     def log_message(self, *a):
         pass

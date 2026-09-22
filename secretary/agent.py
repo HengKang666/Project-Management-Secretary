@@ -48,7 +48,9 @@ TOOLS = [
         'parameters': {'type': 'object', 'properties': {'table': {'type': 'string'}}, 'required': ['table']}}},
     {'type': 'function', 'function': {
         'name': 'run_sql',
-        'description': '在只读业务库执行一条 SELECT（只允许业务字典里的表；不支持分号与注释，最多返回 200 行）。',
+        'description': '在只读业务库执行一条 SELECT（只允许业务字典里的表；不支持分号与注释，最多返回 200 行）。'
+                       '★ 要查多个互不依赖的数时，请在**同一次回复里一次发出多条 run_sql**'
+                       '（系统会并发执行，一轮就全拿到）；不要一条一条分多轮来 —— 每多一轮就多花几秒。',
         'parameters': {'type': 'object', 'properties': {'sql': {'type': 'string'}}, 'required': ['sql']}}},
 ]
 
@@ -343,6 +345,8 @@ def ask(question, model=None, max_steps=None, profile=None,
                 messages.append({'role': 'user', 'content':
                                  '你这一轮没有调用任何工具。请先用工具核实事实（查知识库口径 + 查业务库数据），再给出结论；'
                                  '如果确实不需要任何工具，也请先说明理由并至少调用一次工具确认。'
+                                 '另外：需要查多个互不依赖的数时，请把要用到的 run_sql **一次发出**，'
+                                 '不要一条一条分多轮来。'
                                  '不要在回答里提到这条提示，也不要复述你的工具调用过程。'})
                 continue
             if not used_tool:

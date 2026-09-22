@@ -1,0 +1,13 @@
+# 智能问数服务 · Python 依赖
+#
+# 主服务（问答）本身只额外依赖 pymysql；**其它全是标准库**。
+# 知识库那组接口（/api/kb/**）才需要阿里云 SDK 与 requests；
+# 不装它们也能正常问答，只是 /api/kb/** 会返回 503 并说明原因。
+
+pymysql>=1.1.0
+
+# ---- 知识库（阿里云百炼开放接口）----
+alibabacloud_bailian20231229>=1.10.0
+alibabacloud_tea_openapi
+alibabacloud_tea_util
+requests>=2.31.0
