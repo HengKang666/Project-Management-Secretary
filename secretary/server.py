@@ -294,12 +294,33 @@ class H(BaseHTTPRequestHandler):
         want_page = bool(data.get('want_page'))
         # page_mode: 'sync'（默认，页面随答案一起回）/ 'async'（先把答案回来，页面后台生成，用 /api/page 取）
         page_async = (data.get('page_mode') or '').strip().lower() == 'async'
+        # scope：数据范围由上游传（强制按它取数）。
+        scope = (data.get('scope') or data.get('business_scope') or '').strip() or None
+        # skill_id：调用方知道这是哪个技能的追问 → 服务直接加载该技能自己的口径文档当标准，不靠检索。
+        skill_id = (data.get('skill_id') or '').strip()
+        standard = None
+        if skill_id:
+            try:
+                import report as _rep
+                for _s in (_rep.list_triggers().get('skills') or []):
+                    if _s.get('id') == skill_id:
+                        standard = _s.get('doc_text') or None
+                        _tu = _s.get('trigger_user') or {}
+                        scope = scope or _s.get('scope') or _tu.get('scope') or None
+                        profile = profile or ('你的身份：%s（账号 %s，角色 %s）。数据范围：%s。'
+                                              % (_tu.get('name') or _s.get('role') or '',
+                                                 _tu.get('account') or '', _tu.get('role') or '',
+                                                 _s.get('scope') or _tu.get('dept') or ''))
+                        break
+            except Exception:
+                standard = None
         # today：业务上的「今天」，**由上游传**（定时任务/业务系统知道业务日期）。
         # 不传才退回服务器日期；停留天数、同比、"截至今天"全按它算。
         today = (data.get('today') or data.get('business_date') or '').strip() or None
         client_ip = self.client_address[0] if self.client_address else None
         try:
-            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page, today=today, page_async=page_async,
+            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page,
+                          today=today, scope=scope, page_async=page_async, standard=standard,
                           session_id=session_id, user_id=user_id, user_code=user_code,
                           client_ip=client_ip, channel=channel, history_turns=history_turns)
         except Exception as e:

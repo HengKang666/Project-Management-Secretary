@@ -300,7 +300,7 @@ def render_page(content, extra='', model=None, max_tokens=6000, cache_key=None):
 
 
 def ask(question, model=None, max_steps=None, profile=None, want_page=False, today=None, scope=None,
-        page_async=False,
+        page_async=False, standard=None,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None):
     """question = 用户的原话（不需要上游预处理）。
@@ -409,10 +409,16 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         user_content += ('\n\n【名称归一说明】' + fixed['hint'])
     # 角度固定（ANALYSIS_FRAME 永远带），标准可检索 —— 两层分开，互不依赖
     user_content += '\n\n' + ANALYSIS_FRAME
-    user_content += ('\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
-                     '**先用 kb_search 查判断标准**（查《判据规则》或对应技能文档）；'
-                     '查到了就按它判，查不到就只报事实并说明「系统里没有这类判定标准」。'
-                     '**不许拿相邻技能的阈值套到本题上，也不许自己编标准。**')
+    if standard:
+        # 调用方给了 skill_id：这份是该技能自己的口径文档 → **直接当本题的判断标准**，
+        # 不靠检索（检索会挑错标准），也不在代码里写死任何阈值。
+        user_content += ('\n【本题的判断标准】（本题属于该技能，**必须按这份口径判断与组织回答**；'
+                         '里面没写的标准不许自己编）\n' + standard)
+    else:
+        user_content += ('\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
+                         '**先用 kb_search 查判断标准**（查《判据规则》或对应技能文档）；'
+                         '查到了就按它判，查不到就只报事实并说明「系统里没有这类判定标准」。'
+                         '**不许拿相邻技能的阈值套到本题上，也不许自己编标准。**')
     if profile:
         user_content += ('\n\n【提问人身份与数据范围】（判断标准与关注重点按它来，不要因此增减问题里已经要求的必答项）：\n' + profile)
     if scope:
@@ -522,6 +528,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     result = {
         'input_question': raw_question,
         'today': today or time.strftime('%Y-%m-%d'),
+        'standard_loaded': bool(standard),
         'fixed_question': question,
         'name_fix_used': fixed['used'],
         'scope': {
