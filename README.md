@@ -40,7 +40,7 @@
 | SECRETARY_TABLES | 空 | 限定可查的表；空 = 用字典里登记的全部（22 张） |
 | SECRETARY_COMPLETION_APP | e207644fd37247af957b7fbc613e6efc | 上游「信息补全」工作流应用 id（机构名纠错 + 统计时间） |
 
-端点：问答 POST /api/ask {question, session_id}（返回 answer/scope/session_id/qa_id）｜ 技能触发 POST /api/skill/run {skill_id,questions,inputs} ｜ 页面 GET /，技能触发台 GET /skills ｜ 语音页 /asr ｜ 健康 GET /health（含纠错词典与记录库状态）｜ 缺口 GET /api/gaps ｜ 会话列表 GET /api/sessions ｜ 会话历史 GET /api/history?session_id= ｜ 统计 GET /api/stats ｜ 评价 POST /api/feedback ｜ 技能清单 GET /api/triggers、/api/skills、/api/statechange ｜ 计划报告 POST /api/report {notice} ｜ 模拟通知 POST /api/report/notice {station} ｜ 报告参数 GET /api/report/meta。
+端点：问答 POST /api/ask {question, session_id}（返回 answer/scope/session_id/qa_id/qtype/page_html；分析题才给 page_html）｜ 定时技能标题 POST /api/skill/title {skill_id,account}（只回标题，无异常也回）｜ 知识库管理 GET|POST|DELETE /api/kb/**、页面 GET /kb ｜ 技能触发 POST /api/skill/run {skill_id,questions,inputs} ｜ 页面 GET /，技能触发台 GET /skills ｜ 语音页 /asr ｜ 健康 GET /health（含纠错词典与记录库状态）｜ 缺口 GET /api/gaps ｜ 会话列表 GET /api/sessions ｜ 会话历史 GET /api/history?session_id= ｜ 统计 GET /api/stats ｜ 评价 POST /api/feedback ｜ 技能清单 GET /api/triggers、/api/skills、/api/statechange ｜ 计划报告 POST /api/report {notice} ｜ 模拟通知 POST /api/report/notice {station} ｜ 报告参数 GET /api/report/meta。
 
 ## 三、分工与流程（五段）
 
@@ -80,12 +80,12 @@
 
 | 文件 | 职责 |
 |---|---|
-| server.py | HTTP 服务 + 静态页；路由 /health /api/ask /api/asr /api/gaps |
-| agent.py | 五段流程主体：问题补全 + 模型自主循环 + 5 个工具定义 + trace |
+| server.py | HTTP 服务 + 静态页；路由 /health /api/ask /api/asr /api/gaps /api/skill/* /api/kb/* |
+| agent.py | 五段流程主体：问题补全（顺带判题型 查数/分析）+ 模型自主循环 + 3 个工具定义（run_sql/find_column/kb_search）+ 分析题注入《分析规则》与生成分析页面 + trace |
 | name_fix.py | **阶段①字面补全**：错字纠正 + 名称归一；零依赖，失败自动降级不影响主流程（详见 docs/接入-名称纠错与归一.md） |
 | libs/name_correction_lib/ | 上面那步用的纠错引擎本体（标准库实现，附 8 个 CSV 词典与拼音表） |
 | semantic.py | 语义层（只读）：表目录、字段目录、白名单校验、SQL 抽表 |
-| tools_db.py | 只读闸、白名单拦截、list_tables / find_column / describe_table / run_sql |
+| tools_db.py | 只读闸、白名单拦截、find_column / run_sql（list_tables、describe_table 已废：表目录本来就整份注入系统提示） |
 | tools_kb.py | 百炼知识检索客户端（只要切片，不要它生成的答案；limit 可调） |
 | gaps.py | 缺口清单：答不了的问题落 output/gaps/gaps.jsonl |
 | tools_asr.py | 语音识别五阶段（/asr 页面用） |
