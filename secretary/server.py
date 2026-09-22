@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """演示服务：GET / 页面、/kb 知识库页、/skills 技能触发台、/health、/api/sessions、/api/history；
-POST /api/ask、/api/feedback、/api/skill/run、/api/kb/**；DELETE /api/kb/**。标准库实现，零额外依赖。
+POST /api/ask、/api/feedback、/api/skill/run、/api/skill/title、/api/kb/**；DELETE /api/kb/**。标准库实现，零额外依赖。
 
 问答会自动落库到 agent_data（会话/消息/执行明细），历史接口从这里读。
 落库由 qa_log.py 负责，**失败不影响问答**。
@@ -228,6 +228,23 @@ class H(BaseHTTPRequestHandler):
                                         inputs=data.get('inputs') or None)
             except Exception as e:
                 r = {'answer': '服务异常：' + type(e).__name__ + ' ' + str(e)[:200], 'trace': [], 'tool_calls': 0}
+            self._send_json(r)
+            return
+        if path == '/api/skill/title':
+            # 定时触发专用：只回一个标题。无异常也回 status=ok —— **绝不空返回**。
+            data = self._read_json()
+            try:
+                import report as reportmod
+                r = reportmod.run_skill_title((data.get('skill_id') or '').strip(),
+                                              model=data.get('model') or None,
+                                              account=data.get('account') or data.get('uid') or '',
+                                              when=data.get('when') or data.get('triggered_at') or '',
+                                              scope=data.get('scope') or '',
+                                              inputs=data.get('inputs') or None)
+            except Exception as e:
+                r = {'skill_id': data.get('skill_id'), 'status': 'unknown', 'count': None,
+                     'title': '服务异常：' + type(e).__name__ + ' ' + str(e)[:200],
+                     'checked_at': time.strftime('%Y-%m-%d %H:%M:%S')}
             self._send_json(r)
             return
         if path == '/api/report/notice':

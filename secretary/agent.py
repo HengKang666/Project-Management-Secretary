@@ -34,18 +34,10 @@ TOOLS = [
             'top_k': {'type': 'integer', 'description': '返回几条，默认 5'}},
             'required': ['query']}}},
     {'type': 'function', 'function': {
-        'name': 'list_tables',
-        'description': '列出业务字典里登记的表（表名、中文名、用途、行数、注意）。keyword 可选，按表名或用途模糊筛选。',
-        'parameters': {'type': 'object', 'properties': {'keyword': {'type': 'string'}}, 'required': []}}},
-    {'type': 'function', 'function': {
         'name': 'find_column',
         'description': '在业务字典内的表里，按字段名或字段中文注释搜字段，返回「表名 + 字段名 + 类型 + 注释 + 示例值」。'
                        '当你不确定某个数据在哪个字段/哪张表时先用它（例如搜「线损」「执行金额」「台区」）。',
         'parameters': {'type': 'object', 'properties': {'keyword': {'type': 'string'}}, 'required': ['keyword']}}},
-    {'type': 'function', 'function': {
-        'name': 'describe_table',
-        'description': '列出某张表的字段（字段名、类型、注释、业务字典里的中文名与示例值）和前 2 行样本。表必须在业务字典里。',
-        'parameters': {'type': 'object', 'properties': {'table': {'type': 'string'}}, 'required': ['table']}}},
     {'type': 'function', 'function': {
         'name': 'run_sql',
         'description': '在只读业务库执行一条 SELECT（只允许业务字典里的表；不支持分号与注释，最多返回 200 行）。'
@@ -72,21 +64,14 @@ def _chat(messages, model, use_tools=True, max_tokens=1500):
 
 
 def _trim(name, res):
-    if name == 'list_tables':
-        res = dict(res)
-        res['rows'] = (res.get('rows') or [])[:150]
     return json.dumps(res, ensure_ascii=False, default=str)[:4000]
 
 
 def execute(name, args):
     if name == 'kb_search':
         return tools_kb.kb_search(args.get('query', ''), int(args.get('top_k') or 3))
-    if name == 'list_tables':
-        return tools_db.list_tables(args.get('keyword', '') or '')
     if name == 'find_column':
         return tools_db.find_column(args.get('keyword', ''))
-    if name == 'describe_table':
-        return tools_db.describe_table(args.get('table', ''))
     if name == 'run_sql':
         return tools_db.run_sql(args.get('sql', ''))
     return {'error': 'unknown tool ' + str(name)}
@@ -95,7 +80,7 @@ def execute(name, args):
 # 问题补全用的提示：本服务自己做的第一步（上游只补时间与地点）。
 # 只写「怎么用规则」，不写任何业务规则 —— 补成什么样完全由知识库切片决定。
 COMPLETE_SYSTEM = (
-    '你在做「问题补全」：把用户的问法补成一条标准的完整查询要求。\n'
+    '你在做「问题补全 + 类型判断」：先把用户的问法补成一条标准的完整查询要求，再判断这道题要不要做分析。\n'
     '1. 只输出补全后的问题本身，不要回答、不要解释、不要加任何前后缀。\n'
     '2. 补全依据下面给出的规则库切片：切片怎么规定就怎么补，不要自己另立规则。\n'
     '3. 先判断切片里有没有与用户问题**对应**的补全规则。判断标准（三条必须全满足）：\n'
@@ -110,8 +95,65 @@ COMPLETE_SYSTEM = (
     '多轮会话里，缺的部分可能该**沿用上一轮**（上一轮问的是「环潭供电所」，这一轮只说'
     '「那售电量呢」，地点就该是环潭供电所而不是全市）。自己补默认值会和【统计范围】打架。\n'
     '   - 也不要自己推算日期（「上月」是几月）——【统计范围】里已经是具体年月。\n'
-    '   - 补完的问题里，时间与地点都要按【统计范围】写全。'
+    '   - 补完的问题里，时间与地点都要按【统计范围】写全。\n'
+    '5. **判类型**（只判这一件事，不要因为类型去改上面的补全结果）：\n'
+    '   判据只有一条：**回答前要不要一个判断标准（阈值 / 规则 / 口径）**。要就是「分析」，不要就是「查数」。\n'
+    '   - 「分析」：原因、趋势、对比，以及一切「有没有 / 是不是 / 合不合理」的判定题 ——'
+     '因为它们必须先有标准才能下结论。\n'
+    '     例：「今天为什么比昨天多」「今天有没有项目逾期」「线损率是不是偏高」「这笔钱花得合不合理」→ 分析。\n'
+    '   - 「查数」：一个数、一组数、清单、排名、占比、多少个、是什么；取到数就能回答，不依赖任何标准。\n'
+    '     例：「线损率是多少」「有多少个项目」「排名前五的所」「全市台区总共有多少个」→ 查数。\n'
+    '   - 拿不准时判「查数」（判成分析会多查一次规则库，代价更高）。\n'
+    '6. 输出**必须是一个 JSON 对象**，不要有任何其它文字、不要包代码块：\n'
+    '   {"completed": "补全后的问题", "type": "查数" 或 "分析", "topic": "要分析什么"}\n'
+    '   - type 只能是「查数」或「分析」这两个字面值。\n'
+    '   - topic 只在 type=分析 时写：一句话说清要分析的对象与角度（用来检索分析规则），'
+     '例如「供电所线损率同比升高的原因」；type=查数 时给空字符串。'
 )
+
+
+# 知识库里「分析规则」这篇文档的文档名（在检索面索引 r57xtq9ypm 内）。
+# 只认这一个文档名的切片 —— 否则补全规则会被当成判断标准，等于自己编标准。
+ANALYSIS_DOC = '分析规则'
+
+
+def analysis_rules(topic, question, top_k=4, limit=1500):
+    """取「分析规则」切片。**只给分析类问题用**，查数类不调它。
+
+    检索词优先用判出来的 topic（挑明了要分析什么），没有才退回原问题。
+    检索失败按「没规则」处理：宁可只呈现事实，也不许拿别的东西当标准。
+    """
+    q = (topic or question or '').strip()
+    if not q:
+        return []
+    try:
+        r = tools_kb.kb_search(q, top_k=top_k, limit=limit)
+        return [n for n in (r.get('nodes') or []) if ANALYSIS_DOC in (n.get('doc_name') or '')]
+    except Exception:
+        return []
+
+
+def _parse_complete(raw, question):
+    """把补全那一次调用的产出解析成 {completed, qtype, topic}。
+
+    模型偶发不按 JSON 输出（只回一句补全后的问题）：那时**退回「查数 + 原问题」** ——
+    既不让一段自然语言混进 completed，也不在没判准时误走分析分支。
+    """
+    txt = (raw or '').strip()
+    if txt.startswith('```'):
+        txt = txt.strip('`').strip()
+    i, j = txt.find('{'), txt.rfind('}')
+    if i >= 0 and j > i:
+        try:
+            d = json.loads(txt[i:j + 1])
+            completed = str(d.get('completed') or '').strip()
+            qtype = '分析' if str(d.get('type') or '').strip() == '分析' else '查数'
+            topic = str(d.get('topic') or '').strip() if qtype == '分析' else ''
+            if completed:
+                return {'completed': completed, 'qtype': qtype, 'topic': topic, 'parsed': True}
+        except Exception:
+            pass
+    return {'completed': question, 'qtype': '查数', 'topic': '', 'parsed': False}
 
 
 def complete_question(question, model=None, scope_text=None, prev_question=None):
@@ -138,7 +180,7 @@ def complete_question(question, model=None, scope_text=None, prev_question=None)
                      '\n（本轮可能省略了主语或指标，请结合上一轮理解它到底在问什么）\n')
     if scope_text:
         ask_text += '\n【统计范围】（时间与地点已确定，补全时直接采用，不要改成别的）\n' + scope_text + '\n'
-    ask_text += '\n用户问题：' + question + '\n\n请输出补全后的问题。'
+    ask_text += '\n用户问题：' + question + '\n\n请按要求输出那个 JSON 对象。'
     msgs = [{'role': 'system', 'content': COMPLETE_SYSTEM},
             {'role': 'user', 'content': ask_text}]
     out = ''
@@ -147,7 +189,9 @@ def complete_question(question, model=None, scope_text=None, prev_question=None)
         out = (resp['choices'][0]['message'].get('content') or '').strip()
     except Exception:
         out = ''
-    return {'input': question, 'completed': out or question, 'ok': bool(out),
+    dec = _parse_complete(out, question)
+    return {'input': question, 'completed': dec['completed'], 'ok': bool(dec['parsed']),
+            'qtype': dec['qtype'], 'topic': dec['topic'], 'parsed': dec['parsed'], 'raw': out,
             'ms': int((time.time() - t0) * 1000),
             'rules': [{'doc_name': n.get('doc_name'), 'title': n.get('title'), 'score': n.get('score')}
                       for n in nodes]}
@@ -196,6 +240,83 @@ def _exec_calls(calls):
         return [_one_call(calls[0])]
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(calls))) as ex:
         return list(ex.map(_one_call, calls))
+
+
+# 「分析页面」用的系统提示：**独立的一次模型调用**，只产出一个单页 HTML 数据大屏。
+PAGE_SYSTEM = (
+    '你是HTML数据大屏生成助手小智。根据用户提供的内容，生成一个可直接运行的单页 HTML 页面。\n'
+    '\n## 特殊规则\n'
+    '- 如果用户内容中包含“澄清话术”，直接返回空字符串，不输出任何内容。\n'
+    '- 只有在用户要求“生成列表”，生成的html页面不能生成echarts图表，必须输出表格\n'
+    '- 只有在用户要求“编写报告”，生成的html页面不能生成echarts图表，也不用输出表格\n'
+    '- 其他情况都要输出echarts表\n'
+    '\n## 输出规范\n'
+    '- 只能输出 HTML 源码本身。\n- 不要解释。\n- 不要使用 Markdown。\n- 不要使用代码块。\n'
+    '- 不要输出除 HTML 以外的任何内容。\n- `body` 可滚动，但必须隐藏滚动条。\n'
+    '\n## 页面要求\n'
+    '- 必须包含 `<!DOCTYPE html>`、`<html>`、`<head>`、`<body>`。\n'
+    '- 页面宽度 `100%`，高度 `100%`。\n- 表格平铺全部展示，不能用固定高度\n- 不能有滚动条\n'
+    '- 不要生成页面标题。\n- 整体风格为科技风数据大屏。\n'
+    '- 页面背景使用：`linear-gradient(145deg,#1e293b,#0f172a)`。\n'
+    '- 全局字体使用：`font-family: cursive;`\n- 全局字号不得小于 `24px`。\n'
+    '- 表格当中字体大小必须是20px\n'
+    '\n## 技术要求\n'
+    '- 使用 TailwindCSS CDN。\n- 使用 ECharts CDN。\n'
+    '- 所有图表必须在 DOM 加载完成后再初始化，例如放在 `DOMContentLoaded` 中执行。\n'
+    '- ECharts 必须基于已存在的 DOM 元素初始化，避免获取不到容器。\n'
+    '- 每个图表都必须放在固定高度容器中。\n- ECharts 图表必须自适应父容器宽高。\n'
+    '- 必须监听窗口变化并调用图表 `resize`。\n- 图表样式要有区分，不要全部使用同一种图表风格。\n'
+    '\n## 内容规则\n'
+    '- 只根据用户提供的内容进行布局和展示。\n- 不新增任何模块。\n- 不补充不存在的信息。\n- 不模拟数据。\n'
+    '- 如果用户内容不足以生成图表，则使用文本、表格、分区块等方式展示，但仍然不能虚构内容。\n'
+    '- 如果用户内容中包含“澄清话术”，直接返回空字符串，不输出任何内容。\n'
+    '- 如果用户要求“生成列表”，生成的html页面不能生成echarts图表，必须输出表格\n'
+    '- 如果用户要求“生成报告”，生成的html页面不能生成echarts图表，必须输出表格\n'
+    '\n## 代码约束\n'
+    '- 优先使用 Tailwind 工具类，尽量少写自定义 CSS。\n- `style` 标签内容控制在 10 行以内。\n'
+    '- HTML 总行数控制在 240 行以内。\n- 代码必须可直接保存并运行。\n'
+    '\n## 生成策略\n'
+    '- 优先保证结构清晰、渲染稳定、代码简洁。\n- 减少冗余标签、重复样式和无意义包装层。\n'
+    '- 仅输出最终 HTML 结果。'
+)
+
+
+def _strip_html(out):
+    """从模型输出里取出 HTML 本体：去掉 ``` 包裹，丢掉 HTML 之前的任何说明文字。
+
+    取不到 HTML（模型没照做）就返回空串 —— 宁可不要页面，也不要往接口里塞一段散文。
+    """
+    t = (out or '').strip()
+    if t.startswith('```'):
+        t = t.strip('`').strip()
+        if t[:4].lower() == 'html':
+            t = t[4:].lstrip()
+    low = t.lower()
+    i = low.find('<!doctype')
+    if i < 0:
+        i = low.find('<html')
+    if i < 0:
+        return ''
+    return t[i:].strip()
+
+
+def render_page(content, model=None, max_tokens=6000):
+    """分析结论 -> 单页 HTML 数据大屏。**独立的一次模型调用，与作答那次不共用。**
+
+    它是附属产物：任何异常都只返回空串，绝不能因为它把回答搞丢。
+    """
+    text = (content or '').strip()
+    if not text or '澄清话术' in text:
+        return ''
+    try:
+        resp = _chat([{'role': 'system', 'content': PAGE_SYSTEM},
+                      {'role': 'user', 'content': text}],
+                     model or config.MODEL, use_tools=False, max_tokens=max_tokens)
+        out = (resp['choices'][0]['message'].get('content') or '')
+    except Exception as e:
+        print('[agent] 分析页面渲染失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
+        return ''
+    return _strip_html(out)
 
 
 def ask(question, model=None, max_steps=None, profile=None,
@@ -282,11 +403,15 @@ def ask(question, model=None, max_steps=None, profile=None,
                              scope_text=scope['scope_text'],
                              prev_question=(history[-1].get('raw_question') if history else None))
     completed = done['completed']
+    # 分流：这一次调用顺带判出来的题型（查数 / 分析）。解析失败一律当「查数」，不走分析分支。
+    qtype = done.get('qtype') or '查数'
+    rules_nodes = []          # 分析分支命中的「分析规则」切片，结果里要报个数
     # 判断（我们这边唯一的职责）：补全有没有产出与原文不同的内容 —— 相同就视为“没找到对应规则、不采用”
     used = bool(completed and completed.strip() and completed.strip() != question.strip())
     trace.append({'seq': len(trace) + 1, 'kind': 'complete', 'tool': 'question_completion',
                   'ms': done['ms'], 'args': {'input': question, 'rules': done['rules']},
-                  'result': {'completed': completed, 'ok': done['ok'], 'used': used,
+                  'result': {'completed': completed, 'ok': done['ok'], 'used': used, 'qtype': qtype,
+                             'topic': done.get('topic') or '', 'parsed': bool(done.get('parsed')),
                              'reason': '按规则库补全' if used else '规则库没有对应问法，不采用补全'}})
     t_loop = time.time()
     # 问题为准；补全结果只作参考，由模型自己判断适不适用
@@ -316,6 +441,17 @@ def ask(question, model=None, max_steps=None, profile=None,
                          '它**只是参考**：如果与上面【统计范围】里的时间或地点不一致，'
                          '**一律以【统计范围】为准**；如果它提到的指标在当前数据里查不到，'
                          '也以问题为准，忽略不适用的部分。\n' + completed)
+    if qtype == '分析':
+        rules_nodes = analysis_rules(done.get('topic'), question)
+        ref = '\n\n'.join('【%s】%s' % (n.get('title') or '', n.get('content') or '') for n in rules_nodes)
+        user_content += ('\n\n【分析规则】（这是本题的判断标准，**必须按它判断**）\n'
+                         + (ref or '（没检索到对应规则：只呈现查得到的事实，不要自己编判断标准）')
+                         + '\n规则里没写的标准不许自己编；查不到就写「未查得」，不许估算、不许补 0；'
+                           '结论、依据（数字）、标准、建议四段都要有。')
+        trace.append({'seq': len(trace) + 1, 'kind': 'analysis_rules', 'tool': 'kb_search',
+                      'args': {'query': done.get('topic') or question},
+                      'result': {'hit': len(rules_nodes),
+                                 'docs': [{'doc_name': n.get('doc_name'), 'score': n.get('score')} for n in rules_nodes]}})
     if profile:
         user_content += ('\n\n用户画像（用于判断统计范围与关注重点，不要因此增减问题里已经要求的必答项）：\n' + profile)
     messages = [{'role': 'system', 'content': _system()}, {'role': 'user', 'content': user_content}]
@@ -378,7 +514,17 @@ def ask(question, model=None, max_steps=None, profile=None,
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
             messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _trim(o['name'], o['result'])})
-    DB_TOOLS = ('run_sql', 'list_tables', 'describe_table')
+    # 分析题的附加产物：**另一次模型调用**把结论渲染成单页 HTML 数据大屏。
+    # 与作答那次不共用；同步生成、同步随本响应返回。页面失败只返回空串，回答照旧。
+    page_html = ''
+    if qtype == '分析' and answer and config.PAGE_ON:
+        t_page = time.time()
+        page_html = render_page(answer, model)
+        trace.append({'seq': len(trace) + 1, 'kind': 'page', 'tool': 'render_page',
+                      'ms': int((time.time() - t_page) * 1000),
+                      'result': {'ok': bool(page_html), 'chars': len(page_html),
+                                 'reason': '已生成分析页面' if page_html else '未生成（模型未给出 HTML 或调用失败）'}})
+    DB_TOOLS = ('run_sql',)
     db_calls = [t for t in trace if t.get('tool') in DB_TOOLS]
     sql_calls = [t for t in trace if t.get('tool') == 'run_sql']
     kb_calls = [t for t in trace if t.get('tool') == 'kb_search']
@@ -399,6 +545,9 @@ def ask(question, model=None, max_steps=None, profile=None,
         },
         'user_profile': profile or '',
         'completion_used': used,
+        'qtype': qtype,
+        'analysis_rules_hit': (len(rules_nodes) if qtype == '分析' else 0),
+        'page_html': page_html,
         'completed_question': completed,
         'answer': answer,
         'trace': trace,

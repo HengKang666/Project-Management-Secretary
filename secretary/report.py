@@ -24,7 +24,7 @@ BASE_SYSTEM = (
     '2. 项目清单与金额、缺陷类型、指标现状，都必须先查过才能写；一次工具都不调就想作答会被直接拦下。'
     '凭印象编项目名和数字，是这份工作里最严重的错误。\n'
     '3. 只能查业务字典里登记的表，只允许 SELECT；查询要把已作废的记录排除。\n'
-    '4. 表名与字段名靠字典查（list_tables / find_column / describe_table），不要凭猜测写 SQL。\n'
+    '4. 表名与字段名以上面给的表目录为准，不确定某个字段在哪张表时用 find_column 查，不要凭猜测写 SQL。\n'
     '5. 库里没有的就写「未查得」或「无法判定」，不许估算、不许补 0、不许拿别的年份顶。\n'
     '【下面是文字的硬要求】\n'
     '6. 不许出现数据库表名、字段名、英文标识、SQL、查询条件、返回行数、期次编码。\n'
@@ -65,7 +65,7 @@ def _system(doc_text=None):
     return '\n\n'.join([
         base,
         bar + '\n【技能文档：必须按它来分析】\n' + bar + '\n' + skill,
-        bar + '\n【可查的表（表名与字段以字典为准，用 list_tables / find_column / describe_table 查）】\n' + bar + '\n' + menu,
+        bar + '\n【可查的表（表名与字段以上面目录为准，字段不确定用 find_column 查）】\n' + bar + '\n' + menu,
     ])
 
 
@@ -107,6 +107,88 @@ def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None,
     return {'skill': sk.get('name'), 'skill_id': skill_id, 'answer': answer, 'trace': trace, 'use_doc': bool(use_doc),
             'questions': len(qs), 'doc': sk.get('doc'), 'doc_chars': len(doc), 'blocked': blocked,
             'tool_calls': len(calls), 'elapsed_ms': int((time.time() - t0) * 1000)}
+
+
+def _parse_title(answer):
+    """从模型那行 JSON 里取 {count, title}。取不到返回 (None, '', False)。"""
+    import json as _json
+    t = (answer or '').strip()
+    if t.startswith('```'):
+        t = t.strip('`').strip()
+    i, j = t.find('{'), t.rfind('}')
+    if i >= 0 and j > i:
+        try:
+            d = _json.loads(t[i:j + 1])
+            cnt = d.get('count')
+            cnt = int(cnt) if cnt is not None and str(cnt).strip() not in ('', 'null') else 0
+            return cnt, str(d.get('title') or '').strip(), True
+        except Exception:
+            pass
+    return None, '', False
+
+
+def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=None):
+    """定时触发专用：**只回一个标题**。
+
+    定时任务是上游的，它只要「今天有没有要报的异常」这一句话。所以这里：
+      - 只做计数判断，不查明细、不写分析（明细问题交给 /api/ask，按分析规则答）；
+      - **永远有返回**：无异常也回 status=ok 的标题，绝不空返回；
+      - 判据查不出来时回 status=unknown 并说明，让上游有东西可展示。
+    """
+    t0 = time.time()
+    cfg = list_triggers()
+    sk = None
+    for s in cfg.get('skills') or []:
+        if s.get('id') == skill_id:
+            sk = s
+            break
+    if not sk:
+        return {'skill_id': skill_id, 'status': 'unknown', 'count': None, 'error': 'unknown_skill',
+                'title': '没有这个技能：' + str(skill_id), 'checked_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+    if (sk.get('trigger') or '') != 'scan':
+        return {'skill_id': skill_id, 'name': sk.get('name'), 'status': 'unknown', 'count': None,
+                'error': 'not_scan_trigger', 'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'title': '%s 不是定时触发技能，请用 /api/skill/run' % (sk.get('name') or skill_id)}
+    doc = sk.get('doc_text') or ''
+    tu = sk.get('trigger_user') or {}
+    who_role = sk.get('role') or tu.get('role') or ''
+    who_scope = scope or sk.get('scope') or tu.get('dept') or '全部'
+    now = when or time.strftime('%Y-%m-%d %H:%M:%S')
+    user = ('你的身份：%s。数据范围：%s。**所有数据只能取这个范围内。**\n' % (who_role or '（未定）', who_scope))
+    if account:
+        user += '上游传过来的账号：%s\n' % account
+    if inputs:
+        user += '上游传过来的数据：\n'
+        for it in inputs:
+            user += '  - %s：%s\n' % (it.get('label') or '', it.get('value') or '')
+    user += (
+        '定时任务触发时间：%s\n\n'
+        '【任务】只做一件事：按技能文档的判据，判断**今天有没有需要报的异常**，给一个数字和一个标题。\n'
+        '1. 只用 run_sql 查**计数**（需要几条计数就一次发几条）；**不要查明细、不要写分析、不要写建议**。\n'
+        '2. count = 命中判据的条数；0 表示无异常。\n'
+        '3. 输出**只有一行 JSON**，不要任何其它文字、不要代码块：\n'
+        '   {"count": 整数, "title": "一句话标题"}\n'
+        '   - title 要写清对象与数量，例如「今天有 3 个项目逾期未处理」；count=0 时写「今天无项目逾期」。\n'
+    ) % now
+    answer, trace, blocked = _loop(_system(doc), user, model or agent.config.MODEL, max_steps=8)
+    count, title, ok = _parse_title(answer)
+    if ok:
+        status = 'abnormal' if (count or 0) > 0 else 'ok'
+        if not title:
+            title = ('今天有 %d 项需要处理' % count) if count else '今天无异常'
+    else:
+        # 没解析出 JSON —— 不空返回：把模型原文压成一行当标题，并标 unknown 让人能看出来。
+        status = 'unknown'
+        title = ((sk.get('name') or '') + '：本次未取到判据结果，请人工核对').strip()
+    calls = [t for t in trace if t.get('kind') == 'tool']
+    return {'skill_id': skill_id, 'name': sk.get('name'), 'status': status,
+            'count': count if ok else None, 'title': title,
+            'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'triggered_at': now, 'account': account or '',
+            'role': who_role or '', 'scope': who_scope or '',
+            'tool_calls': len(calls), 'sql': [t.get('args', {}).get('sql') for t in calls if t.get('args', {}).get('sql')],
+            'blocked': blocked, 'elapsed_ms': int((time.time() - t0) * 1000),
+            'raw': (answer or '')[:400]}
 
 
 def state_change_sim():

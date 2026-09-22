@@ -161,3 +161,7 @@ MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))
 SQL_MAX_ROWS = 200
 SQL_TIMEOUT_MS = 25000
 HTTP_TIMEOUT = 120
+
+# 分析题的「分析页面」：判出题型为分析时，额外调一次模型把结论渲染成单页 HTML 数据大屏。
+# 设 SECRETARY_PAGE=0 可关掉（关掉后 /api/ask 不再返回 page_html，回答不受影响）。
+PAGE_ON = (os.environ.get('SECRETARY_PAGE') or ENV.get('SECRETARY_PAGE') or '1').strip().lower() not in ('0', 'false', 'no')
