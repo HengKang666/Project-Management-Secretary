@@ -154,6 +154,48 @@ def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=
     who_role = sk.get('role') or tu.get('role') or ''
     who_scope = scope or sk.get('scope') or tu.get('dept') or '全部'
     now = when or time.strftime('%Y-%m-%d %H:%M:%S')
+
+    # ---- 声明式计数（**默认路径**）：计数查询写在技能配置的 title_rule 里，这里直接执行 ----
+    # 为什么不让模型数：模型每次现写 SQL，同一请求会数出 13/5/0 三种结果（实测）。
+    # 口径属于标准层 —— 放在技能配置里，业务能改、改了不用发版；模型只负责措辞（其实是模板）。
+    rule = sk.get('title_rule') or {}
+    csql = (rule.get('count_sql') or '').strip()
+    if csql:
+        sql2 = (csql.replace('{today}', today).replace('{scope}', who_scope)
+                    .replace('{account}', account or ''))
+        try:
+            row = (tools_db.run_sql(sql2).get('rows') or [{}])[0]
+        except Exception as e:                      # noqa: BLE001
+            row = None
+            err = '%s: %s' % (type(e).__name__, str(e)[:200])
+        if row is None:
+            return {'skill_id': skill_id, 'name': sk.get('name'), 'status': 'unknown', 'count': None,
+                    'title': (sk.get('name') or skill_id) + '：计数查询执行失败，请人工核对',
+                    'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'), 'today': today,
+                    'triggered_at': now, 'account': account or '', 'role': who_role, 'scope': who_scope,
+                    'sql': [sql2], 'error': err, 'mode': 'declared',
+                    'elapsed_ms': int((time.time() - t0) * 1000)}
+        vals = {}
+        for k, v in row.items():
+            try:
+                vals[k] = int(v) if v is not None and str(v).strip() not in ('', 'None') else 0
+            except Exception:
+                vals[k] = v
+        vals.update({'scope': who_scope, 'account': account or '', 'today': today})
+        n = vals.get('n', 0)
+        tmpl = rule.get('zero') or '今天无异常'
+        if n:
+            try:
+                tmpl = (rule.get('template') or '今天有 {n} 项需处理').format(**vals)
+            except Exception:
+                tmpl = '今天有 %d 项需处理' % n
+        return {'skill_id': skill_id, 'name': sk.get('name'),
+                'status': 'abnormal' if n else 'ok', 'count': n, 'title': tmpl,
+                'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'), 'today': today,
+                'triggered_at': now, 'account': account or '', 'role': who_role, 'scope': who_scope,
+                'sql': [sql2], 'mode': 'declared',
+                'by_dimension': {k: v for k, v in vals.items() if k not in ('scope', 'account', 'today')},
+                'elapsed_ms': int((time.time() - t0) * 1000)}
     today = today or time.strftime('%Y-%m-%d')   # 业务上的「今天」由上游传，没传才用服务器日期
     user = ('你的身份：%s。数据范围：%s。**所有数据只能取这个范围内。**\n' % (who_role or '（未定）', who_scope))
     if account:
