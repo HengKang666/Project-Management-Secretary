@@ -320,7 +320,7 @@ def _says_whole_city(question):
     return any(w in q for w in _WHOLE_CITY)
 
 
-def describe(question, fixed=None, prev=None):
+def describe(question, fixed=None, prev=None, today=None):
     """一步到位：返回 {time, place, scope_text, question, inherited}。
 
     scope_text 是给模型看的【统计范围】说明；question 是补全后的完整问题。
@@ -331,7 +331,7 @@ def describe(question, fixed=None, prev=None):
 
     prev = 上一轮的统计范围（同一场会话）：{period_type, period_key, time_text, place}
     """
-    t = resolve(question, prev=prev)
+    t = resolve(question, today=today, prev=prev)
     place = place_of(fixed, question)
     place_default = False
     place_inherited = False

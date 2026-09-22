@@ -43,7 +43,7 @@ def _read(path):
         return f.read()
 
 
-def _system(doc_text=None):
+def _system(doc_text=None, today=None):
     try:
         skill = doc_text if doc_text is not None else _read(SKILL_DOC)
     except Exception as e:
@@ -59,7 +59,7 @@ def _system(doc_text=None):
     except Exception:
         menu = ''
     bar = '=' * 40
-    today = time.strftime('%Y-%m-%d')
+    today = today or time.strftime('%Y-%m-%d')
     base = BASE_SYSTEM + ('今天的日期是 %s。「今天」「当前」「截至现在」一律按这一天算，'
                           '不要拿上游数据里的时间当今天。\n' % today)
     return '\n\n'.join([
@@ -127,7 +127,7 @@ def _parse_title(answer):
     return None, '', False
 
 
-def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=None):
+def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=None, today=None):
     """定时触发专用：**只回一个标题**。
 
     定时任务是上游的，它只要「今天有没有要报的异常」这一句话。所以这里：
@@ -154,6 +154,7 @@ def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=
     who_role = sk.get('role') or tu.get('role') or ''
     who_scope = scope or sk.get('scope') or tu.get('dept') or '全部'
     now = when or time.strftime('%Y-%m-%d %H:%M:%S')
+    today = today or time.strftime('%Y-%m-%d')   # 业务上的「今天」由上游传，没传才用服务器日期
     user = ('你的身份：%s。数据范围：%s。**所有数据只能取这个范围内。**\n' % (who_role or '（未定）', who_scope))
     if account:
         user += '上游传过来的账号：%s\n' % account
@@ -162,15 +163,15 @@ def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=
         for it in inputs:
             user += '  - %s：%s\n' % (it.get('label') or '', it.get('value') or '')
     user += (
-        '定时任务触发时间：%s\n\n'
+        '业务日期（今天）：%s\n定时任务触发时间：%s\n\n'
         '【任务】只做一件事：按技能文档的判据，判断**今天有没有需要报的异常**，给一个数字和一个标题。\n'
         '1. 只用 run_sql 查**计数**（需要几条计数就一次发几条）；**不要查明细、不要写分析、不要写建议**。\n'
         '2. count = 命中判据的条数；0 表示无异常。\n'
         '3. 输出**只有一行 JSON**，不要任何其它文字、不要代码块：\n'
         '   {"count": 整数, "title": "一句话标题"}\n'
         '   - title 要写清对象与数量，例如「今天有 3 个项目逾期未处理」；count=0 时写「今天无项目逾期」。\n'
-    ) % now
-    answer, trace, blocked = _loop(_system(doc), user, model or agent.config.MODEL, max_steps=8)
+    ) % (today, now)
+    answer, trace, blocked = _loop(_system(doc, today), user, model or agent.config.MODEL, max_steps=8)
     count, title, ok = _parse_title(answer)
     if ok:
         status = 'abnormal' if (count or 0) > 0 else 'ok'
@@ -184,7 +185,7 @@ def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=
     return {'skill_id': skill_id, 'name': sk.get('name'), 'status': status,
             'count': count if ok else None, 'title': title,
             'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'triggered_at': now, 'account': account or '',
+            'today': today, 'triggered_at': now, 'account': account or '',
             'role': who_role or '', 'scope': who_scope or '',
             'tool_calls': len(calls), 'sql': [t.get('args', {}).get('sql') for t in calls if t.get('args', {}).get('sql')],
             'blocked': blocked, 'elapsed_ms': int((time.time() - t0) * 1000),

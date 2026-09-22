@@ -77,134 +77,60 @@ def execute(name, args):
     return {'error': 'unknown tool ' + str(name)}
 
 
-# 问题补全用的提示：本服务自己做的第一步（上游只补时间与地点）。
-# 只写「怎么用规则」，不写任何业务规则 —— 补成什么样完全由知识库切片决定。
-COMPLETE_SYSTEM = (
-    '你在做「问题补全 + 类型判断」：先把用户的问法补成一条标准的完整查询要求，再判断这道题要不要做分析。\n'
-    '1. 只输出补全后的问题本身，不要回答、不要解释、不要加任何前后缀。\n'
-    '2. 补全依据下面给出的规则库切片：切片怎么规定就怎么补，不要自己另立规则。\n'
-    '3. 先判断切片里有没有与用户问题**对应**的补全规则。判断标准（三条必须全满足）：\n'
-    '   - 切片里明确写着「用户问 X 时，补全为 …」，且 X 与用户问题说的是**同一件事**。\n'
-    '   - 只是共享一两个词（例如都含「台区」「情况」）不算对应。\n'
-    '   - 补全**不能改变问题的类型**：用户问的是某个具体指标或数量（如「台区线损率是多少」「低电压台区有多少个」），'
-    '就不能套用「整体情况 / 台区情况说明」这类规则；反过来，用户问整体情况，也不要补成单个指标。\n'
-    '   有对应规则 → 按它补全；没有对应规则 → **原样输出用户问题**，不要编造补全内容。\n'
-    '4. **时间与地点不要自己定** —— 它们已经由前面的步骤算好了，就在下面给的【统计范围】里，'
-    '直接照抄到补全后的问题里即可。\n'
-    '   - **绝对不要**在问题缺时间/地点时自己补「今年」「今年至今」「全市」这类默认值：'
-    '多轮会话里，缺的部分可能该**沿用上一轮**（上一轮问的是「环潭供电所」，这一轮只说'
-    '「那售电量呢」，地点就该是环潭供电所而不是全市）。自己补默认值会和【统计范围】打架。\n'
-    '   - 也不要自己推算日期（「上月」是几月）——【统计范围】里已经是具体年月。\n'
-    '   - 补完的问题里，时间与地点都要按【统计范围】写全。\n'
-    '5. **判类型**（只判这一件事，不要因为类型去改上面的补全结果）：\n'
-    '   判据只有一条：**回答前要不要一个判断标准（阈值 / 规则 / 口径）**。要就是「分析」，不要就是「查数」。\n'
-    '   - 「分析」：原因、趋势、对比，以及一切「有没有 / 是不是 / 合不合理」的判定题 ——'
-     '因为它们必须先有标准才能下结论。\n'
-    '     例：「今天为什么比昨天多」「今天有没有项目逾期」「线损率是不是偏高」「这笔钱花得合不合理」→ 分析。\n'
-    '     问「先办哪几张 / 该怎么处理 / 下一步做什么 / 给个建议」也算分析 —— 要给排序或行动建议就必须先有标准。\n'
-    '   - 「查数」：一个数、一组数、清单、排名、占比、多少个、是什么；取到数就能回答，不依赖任何标准。\n'
-    '     例：「线损率是多少」「有多少个项目」「排名前五的所」「全市台区总共有多少个」→ 查数。\n'
-    '   - 拿不准时判「查数」（判成分析会多查一次规则库，代价更高）。\n'
-    '6. 输出**必须是一个 JSON 对象**，不要有任何其它文字、不要包代码块：\n'
-    '   {"completed": "补全后的问题", "type": "查数" 或 "分析", "topic": "要分析什么"}\n'
-    '   - type 只能是「查数」或「分析」这两个字面值。\n'
-    '   - topic 只在 type=分析 时写：一句话说清要分析的对象与角度（用来检索分析规则），'
-     '例如「供电所线损率同比升高的原因」；type=查数 时给空字符串。'
+# 回答契约：**固定在提示词里，不靠知识库检索**。
+#
+# 为什么固定：检索按相关度取切片，可能只命中「阈值」而漏掉「怎么答」。
+# 所以「从哪些角度答、答到什么粒度、多长」永远随请求带上；
+# 知识库只负责「判断标准是多少、口径怎么写、取数用哪张表」。
+ANALYSIS_FRAME = (
+    '【回答契约】（每次都按它走，不依赖检索到的内容）\n'
+    '1. 先定性：这道题要的是「有哪些 / 有多少 / 为什么 / 怎么办 / 合不合理」中的哪一种。\n'
+    '2. 问「有哪些 / 哪些 / 是哪些」→ **必须逐条把对象列出来**（一行一条），'
+    '每条给题目问到的字段（名字、所属、金额、状态、天数…）；**只回一个数就是答非所问**。\n'
+    '3. 问「有多少 / 几个」→ 给数，并说明这个数是怎么算的（范围 + 状态 + 时间口径）。\n'
+    '4. 问「为什么 / 原因」→ 业务库里通常**没有原因字段**：先把能确定的事实给全'
+    '（状态、停留天数、金额、卡在哪个节点、责任人），再明确写「原因需业务核实，系统里没有原因字段」。'
+    '**不许编原因，也不许回一句「未找到相关信息」。**\n'
+    '5. 问「怎么办 / 先办哪几个 / 给建议」→ 给排序 + 排序依据 + 该谁动。\n'
+    '6. 只问一个数 → 只给数，**不要附加「偏高/偏低/异常」这类判断**。\n'
+    '7. 判断标准只认下面【判断标准】里给的；没给标准就不下判断、不编标准。\n'
+    '8. 长度：先结论后依据，正文控制在 300 字内（逐条清单可略长，一行一条、不要客套）。\n'
+    '9. 数量必须与清单一致：说「N 条」，清单就得正好 N 条；概览与明细不能互相矛盾。\n'
 )
 
 
-# 知识库里这两篇文档的名字（都在检索面索引 r57xtq9ypm 内）：
-#   问法归一 = 残缺问法 -> 标准口径；分析规则 = 判断标准。
-# 只认这两个文档名的切片 —— 否则别的文档会被当成判断标准，等于自己编标准。
-ANALYSIS_DOCS = ('问法归一', '分析规则')
+# 检索回来的切片里，只挡掉这些明显是测试/噪声的文档，其余业务文档一律采用。
+KB_SKIP_DOCS = ('测试',)
 
 
-def analysis_rules(topic, question, top_k=8, limit=1500):
-    """取「分析规则」切片。**只给分析类问题用**，查数类不调它。
+def analysis_rules(topic, question, top_k=4, limit=700):
+    """检索知识库里的判断标准（判据）。**只取判据，不取生成答案**。
 
-    检索词优先用判出来的 topic（挑明了要分析什么），没有才退回原问题。
-    检索失败按「没规则」处理：宁可只呈现事实，也不许拿别的东西当标准。
+    这一步同时兼作分流：**命中判据 = 按判据判断；没命中 = 只呈现事实**。
+    检索失败按「没判据」处理：宁可只报事实，也不许拿别的东西当标准。
     """
     q = (topic or question or '').strip()
     if not q:
         return []
     try:
-        r = tools_kb.kb_search(q, top_k=top_k, limit=limit)
-        return [n for n in (r.get('nodes') or [])
-                if any(d in (n.get('doc_name') or '') for d in ANALYSIS_DOCS)]
+        r = tools_kb.kb_search(q, top_k=top_k * 2, limit=limit)
+        out, seen = [], set()
+        for n in (r.get('nodes') or []):
+            doc = n.get('doc_name') or ''
+            if any(d in doc for d in KB_SKIP_DOCS) or doc in seen:
+                continue          # 同一篇文档只取分数最高的一条，别把切片堆满提示词
+            seen.add(doc)
+            out.append(n)
+        return out[:top_k]
     except Exception:
         return []
-
-
-def _parse_complete(raw, question):
-    """把补全那一次调用的产出解析成 {completed, qtype, topic}。
-
-    模型偶发不按 JSON 输出（只回一句补全后的问题）：那时**退回「查数 + 原问题」** ——
-    既不让一段自然语言混进 completed，也不在没判准时误走分析分支。
-    """
-    txt = (raw or '').strip()
-    if txt.startswith('```'):
-        txt = txt.strip('`').strip()
-    i, j = txt.find('{'), txt.rfind('}')
-    if i >= 0 and j > i:
-        try:
-            d = json.loads(txt[i:j + 1])
-            completed = str(d.get('completed') or '').strip()
-            qtype = '分析' if str(d.get('type') or '').strip() == '分析' else '查数'
-            topic = str(d.get('topic') or '').strip() if qtype == '分析' else ''
-            if completed:
-                return {'completed': completed, 'qtype': qtype, 'topic': topic, 'parsed': True}
-        except Exception:
-            pass
-    return {'completed': question, 'qtype': '查数', 'topic': '', 'parsed': False}
-
-
-def complete_question(question, model=None, scope_text=None, prev_question=None):
-    """本服务自己的问题补全：检索补全规则库，让模型按规则改写。
-
-    **必须把已定好的统计范围传进来**（scope_text）：
-    补全的产出会作为【补全参考】交给主循环，若它自己另补一套时间/地点，
-    就会与【统计范围】冲突 —— 多轮里表现为「说了沿用上一轮，模型却按全市答」。
-
-    prev_question = 上一轮的问题，用于理解省略了主语的问法（「那售电量呢」）。
-    """
-    model = model or config.MODEL
-    t0 = time.time()
-    nodes = []
-    try:
-        r = tools_kb.kb_search(question, top_k=6, limit=1200)
-        nodes = r.get('nodes') or []
-    except Exception:
-        nodes = []
-    ref = '\n\n'.join('【%s】%s' % (n.get('title') or '', n.get('content') or '') for n in nodes)
-    ask_text = '补全规则库切片：\n' + (ref or '（没检索到，按通用规则补全）') + '\n'
-    if prev_question:
-        ask_text += ('\n上一轮用户问的是：' + prev_question +
-                     '\n（本轮可能省略了主语或指标，请结合上一轮理解它到底在问什么）\n')
-    if scope_text:
-        ask_text += '\n【统计范围】（时间与地点已确定，补全时直接采用，不要改成别的）\n' + scope_text + '\n'
-    ask_text += '\n用户问题：' + question + '\n\n请按要求输出那个 JSON 对象。'
-    msgs = [{'role': 'system', 'content': COMPLETE_SYSTEM},
-            {'role': 'user', 'content': ask_text}]
-    out = ''
-    try:
-        resp = _chat(msgs, model, use_tools=False)
-        out = (resp['choices'][0]['message'].get('content') or '').strip()
-    except Exception:
-        out = ''
-    dec = _parse_complete(out, question)
-    return {'input': question, 'completed': dec['completed'], 'ok': bool(dec['parsed']),
-            'qtype': dec['qtype'], 'topic': dec['topic'], 'parsed': dec['parsed'], 'raw': out,
-            'ms': int((time.time() - t0) * 1000),
-            'rules': [{'doc_name': n.get('doc_name'), 'title': n.get('title'), 'score': n.get('score')}
-                      for n in nodes]}
 
 
 # 兜底：字典/提示词读不到时才用（正常情况下系统提示全部来自数据库）
 _FALLBACK = '你是随州供电公司的项目管理秘书，负责回答业务问题。'
 
 
-def _system():
+def _system(today=None):
     """系统提示 = 他们在 ai_prompt 里维护的提示词（config.PROMPTS 指定的 key）
     + 业务字典的表目录。**提示词不在代码里写死**。
     """
@@ -217,6 +143,9 @@ def _system():
     except Exception:
         pass
     head = '\n\n'.join(parts).strip() or _FALLBACK
+    # 必须给「今天」：停留天数、同比、"截至今天"全靠它。不给，同一条单两次会算出不同天数。
+    head += ('\n\n今天的日期是 %s。所有「停留天数 / 截至今天」一律按这一天算，'
+             '不要拿数据里的时间当今天。' % (today or time.strftime('%Y-%m-%d')))
     try:
         return head + '\n\n【可用数据表（只能查这些，字典外的表一律不可用）】\n' + semantic.table_menu()
     except Exception:
@@ -325,7 +254,7 @@ def render_page(content, extra='', model=None, max_tokens=6000):
     return _strip_html(out)
 
 
-def ask(question, model=None, max_steps=None, profile=None, want_page=False,
+def ask(question, model=None, max_steps=None, profile=None, want_page=False, today=None, scope=None,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None):
     """question = 用户的原话（不需要上游预处理）。
@@ -389,7 +318,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False,
     # ⓪·5 时间与范围补全：相对时间词换成具体期间；没说的优先沿用上一轮，再没有才补默认值。
     #       这种换算是确定性的（「上月」是几月取决于今天），交给代码，不留给模型去猜日期。
     t_scope = time.time()
-    scope = time_scope.describe(question, fixed, prev=prev_scope)
+    scope = time_scope.describe(question, fixed, prev=prev_scope, today=today)
     if scope['question'] and scope['question'] != question:
         question = scope['question']
     trace.append({'seq': len(trace) + 1, 'kind': 'scope', 'tool': 'time_scope',
@@ -405,20 +334,10 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False,
                              'time_inherited': scope['inherited']['time'],
                              'place_inherited': scope['inherited']['place'],
                              'hint': scope['time']['note']}})
-    done = complete_question(question, model,
-                             scope_text=scope['scope_text'],
-                             prev_question=(history[-1].get('raw_question') if history else None))
-    completed = done['completed']
-    # 分流：这一次调用顺带判出来的题型（查数 / 分析）。解析失败一律当「查数」，不走分析分支。
-    qtype = done.get('qtype') or '查数'
-    rules_nodes = []          # 分析分支命中的「分析规则」切片，结果里要报个数
-    # 判断（我们这边唯一的职责）：补全有没有产出与原文不同的内容 —— 相同就视为“没找到对应规则、不采用”
-    used = bool(completed and completed.strip() and completed.strip() != question.strip())
-    trace.append({'seq': len(trace) + 1, 'kind': 'complete', 'tool': 'question_completion',
-                  'ms': done['ms'], 'args': {'input': question, 'rules': done['rules']},
-                  'result': {'completed': completed, 'ok': done['ok'], 'used': used, 'qtype': qtype,
-                             'topic': done.get('topic') or '', 'parsed': bool(done.get('parsed')),
-                             'reason': '按规则库补全' if used else '规则库没有对应问法，不采用补全'}})
+    # **不预检索、不预注入判据**：按问题检索判据挑"该用哪条标准"实测不稳（会把相邻技能的标准当成本题的标准，
+    # 例如把「项目执行进度异常」当成「审批积压」）。判据改成让模型在循环里用 kb_search 工具自己查 ——
+    # 需要判断就去查，查不到就不下判断（见回答契约第 7 条）。
+    # 问题也不改写：补全只补地名/名称/时间（上面的 name_fix 与 time_scope）。
     t_loop = time.time()
     # 问题为准；补全结果只作参考，由模型自己判断适不适用
     user_content = question
@@ -442,25 +361,20 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False,
         # 名称被归到「地名层」时（库里没有这个精确名），必须告诉模型用前缀查，
         # 否则它很可能拿合成名做等值匹配，一条都查不到还以为是空数据。
         user_content += ('\n\n【名称归一说明】' + fixed['hint'])
-    if used:
-        user_content += ('\n\n【补全参考】按知识库的补全规则库，这个问法通常应补成下面这样。'
-                         '它**只是参考**：如果与上面【统计范围】里的时间或地点不一致，'
-                         '**一律以【统计范围】为准**；如果它提到的指标在当前数据里查不到，'
-                         '也以问题为准，忽略不适用的部分。\n' + completed)
-    if qtype == '分析':
-        rules_nodes = analysis_rules(done.get('topic'), question)
-        ref = '\n\n'.join('【%s】%s' % (n.get('title') or '', n.get('content') or '') for n in rules_nodes)
-        user_content += ('\n\n【分析规则】（这是本题的判断标准，**必须按它判断**）\n'
-                         + (ref or '（没检索到对应规则：只呈现查得到的事实，不要自己编判断标准）')
-                         + '\n规则里没写的标准不许自己编；查不到就写「未查得」，不许估算、不许补 0；'
-                           '结论、依据（数字）、标准、建议四段都要有。')
-        trace.append({'seq': len(trace) + 1, 'kind': 'analysis_rules', 'tool': 'kb_search',
-                      'args': {'query': done.get('topic') or question},
-                      'result': {'hit': len(rules_nodes),
-                                 'docs': [{'doc_name': n.get('doc_name'), 'score': n.get('score')} for n in rules_nodes]}})
+    # 角度固定（ANALYSIS_FRAME 永远带），标准可检索 —— 两层分开，互不依赖
+    user_content += '\n\n' + ANALYSIS_FRAME
+    user_content += ('\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
+                     '**先用 kb_search 查判断标准**（查《判据规则》或对应技能文档）；'
+                     '查到了就按它判，查不到就只报事实并说明「系统里没有这类判定标准」。'
+                     '**不许拿相邻技能的阈值套到本题上，也不许自己编标准。**')
     if profile:
-        user_content += ('\n\n用户画像（用于判断统计范围与关注重点，不要因此增减问题里已经要求的必答项）：\n' + profile)
-    messages = [{'role': 'system', 'content': _system()}, {'role': 'user', 'content': user_content}]
+        user_content += ('\n\n【提问人身份与数据范围】（判断标准与关注重点按它来，不要因此增减问题里已经要求的必答项）：\n' + profile)
+    if scope:
+        # 身份范围必须**压过**【统计范围】里的默认「全市」——否则上游传了范围，模型还是按全市答。
+        user_content += ('\n\n【本题数据范围（强制）】%s\n'
+                         '上面【统计范围】里的地点若是「全市」，那只是默认值；'
+                         '**本题一律只取 %s 范围内的数据**，并在回答里写明这个范围。' % (scope, scope))
+    messages = [{'role': 'system', 'content': _system(today)}, {'role': 'user', 'content': user_content}]
     answer = ''
     nudged = False
     blocked = False
@@ -520,6 +434,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False,
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
             messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _trim(o['name'], o['result'])})
+    # qtype 只作参考，且按**实际发生的事**判定：循环里查过判据（kb_search）才算分析题（不再猜题型）。
+    # 必须在页面判断之前算出来 —— 页面默认只给分析题。
+    qtype = '分析' if any(t.get('tool') == 'kb_search' and t.get('kind') == 'tool' for t in trace) else '查数'
     loop_end = time.time()
     # 分析题的附加产物：**另一次模型调用**把结论渲染成单页 HTML 数据大屏。
     # 与作答那次不共用；同步生成、同步随本响应返回。页面失败只返回空串，回答照旧。
@@ -546,6 +463,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False,
     kb_calls = [t for t in trace if t.get('tool') == 'kb_search']
     result = {
         'input_question': raw_question,
+        'today': today or time.strftime('%Y-%m-%d'),
         'fixed_question': question,
         'name_fix_used': fixed['used'],
         'scope': {
@@ -560,18 +478,18 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False,
             'place_inherited': scope['inherited']['place'],
         },
         'user_profile': profile or '',
-        'completion_used': used,
+        'completion_used': False,      # 已取消「问题改写」，这个字段保留只为兼容历史记录
         'qtype': qtype,
-        'analysis_rules_hit': (len(rules_nodes) if qtype == '分析' else 0),
+        'analysis_rules_hit': len([t for t in trace if t.get('tool') == 'kb_search' and t.get('kind') == 'tool']),
         'page_html': page_html,
-        'completed_question': completed,
+        'completed_question': question,   # 不再改写问题：就是用户原话（只做过地名/时间补全）
         'answer': answer,
         'trace': trace,
         'model': model,
         'elapsed_ms': int((time.time() - t_all) * 1000),
         'timings': {
             'namefix_ms': namefix_ms,
-            'completion_ms': done['ms'],
+            'completion_ms': 0,          # 问题改写已取消；判据检索的时间在 trace 的 rules 步里
             'loop_ms': int((loop_end - t_loop) * 1000),
             'page_ms': int((time.time() - loop_end) * 1000) if page_html else 0,
             'total_ms': int((time.time() - t_all) * 1000),
@@ -586,7 +504,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False,
     }
     try:
         if gaps.is_gap(answer, blocked):
-            gaps.record(question, completed, answer, model=model,
+            gaps.record(question, question, answer, model=model,
                         db_count=result['db_query_count'], kb_count=result['kb_query_count'],
                         unverified=blocked)
             result['recorded_as_gap'] = True

@@ -240,7 +240,8 @@ class H(BaseHTTPRequestHandler):
                                               account=data.get('account') or data.get('uid') or '',
                                               when=data.get('when') or data.get('triggered_at') or '',
                                               scope=data.get('scope') or '',
-                                              inputs=data.get('inputs') or None)
+                                              inputs=data.get('inputs') or None,
+                                              today=(data.get('today') or data.get('business_date') or '').strip() or None)
             except Exception as e:
                 r = {'skill_id': data.get('skill_id'), 'status': 'unknown', 'count': None,
                      'title': '服务异常：' + type(e).__name__ + ' ' + str(e)[:200],
@@ -279,9 +280,12 @@ class H(BaseHTTPRequestHandler):
         history_turns = data.get('history_turns')
         # want_page：显式要分析页面。不传时只有「分析」类问题才生成（查数题不生成，保持快）。
         want_page = bool(data.get('want_page'))
+        # today：业务上的「今天」，**由上游传**（定时任务/业务系统知道业务日期）。
+        # 不传才退回服务器日期；停留天数、同比、"截至今天"全按它算。
+        today = (data.get('today') or data.get('business_date') or '').strip() or None
         client_ip = self.client_address[0] if self.client_address else None
         try:
-            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page,
+            r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page, today=today,
                           session_id=session_id, user_id=user_id, user_code=user_code,
                           client_ip=client_ip, channel=channel, history_turns=history_turns)
         except Exception as e:
