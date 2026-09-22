@@ -58,8 +58,7 @@
         <button id="skillGo" onclick="runSkill()">触发这个技能</button>
       </div>
       <div class="bar" style="margin-top:6px">
-        <select id="roleSel" title="以谁的身份触发"></select>
-        <select id="scopeSel" title="数据范围（层级）" style="flex:1"></select>
+        <span id="whoami" style="font-size:12.5px;color:#5b6470;line-height:1.7"></span>
       </div>
       <div id="skillPanel" style="margin-top:10px"></div>
       <div class="bar" style="margin-top:8px">
@@ -117,8 +116,6 @@ function loadTriggers(){
     TT=d.trigger_types||{};
     var s=document.getElementById('skillSel'); s.innerHTML='';
     (d.skills||[]).forEach(function(k){TRIGGERS[k.id]=k;var o=document.createElement('option');o.value=k.id;o.textContent=k.name+'（'+((TT[k.trigger]||{}).label||'')+'）';s.appendChild(o);});
-    var rs=document.getElementById('roleSel'); (d.roles||[]).forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent='身份：'+x;rs.appendChild(o);});
-    var ss=document.getElementById('scopeSel'); (d.scopes||[]).forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent='范围：'+x;ss.appendChild(o);});
     fetch('/api/statechange').then(function(r){return r.json();}).then(function(x){TRULES=x.rules||[];TORDERS=x.orders||[];showSkill();}).catch(function(){showSkill();});
   }).catch(function(e){document.getElementById('skillPanel').textContent='技能清单加载失败：'+e;});
 }
@@ -128,6 +125,11 @@ function showSkill(){
   var h='<div class="tmod"><div class="tmod-h"><span class="ttag t-'+esc(k.trigger)+'">'+esc(t.label)+'</span>'
    +'<span style="color:#7b838d;font-size:12.5px">触发方式：'+esc(k.trigger)+'</span>'
    +(k.has_doc?'<span style="color:#0f9d58;font-size:12px">已挂技能文档 '+esc(k.doc)+'</span>':'<span style="color:#e08a00;font-size:12px">暂无技能文档</span>')+'</div>';
+  var tu=k.trigger_user||{};
+  document.getElementById('whoami').innerHTML='触发身份：<b>'+esc(tu.name||'（未定）')+'</b>'
+   +(tu.account?'（账号 '+esc(tu.account)+'，'+esc(tu.role||'')+'，'+esc(tu.dept||'')+'）':'')
+   +(k.scope?'　数据范围：'+esc(k.scope):'')
+   +(tu.why?'<br>为什么是他：'+esc(tu.why):'');
   if(k.note){h+='<div class="hint">'+esc(k.note)+'</div>';}
   var qhtml='<details class="qbox"><summary>预设问题（'+k.questions.length+' 条，点开可改可勾选）</summary>';
   k.questions.forEach(function(q,i){
@@ -185,8 +187,8 @@ function runCompare(){
   var qs=collectQs();
   if(!qs.length){ document.getElementById('cmpA').textContent='至少勾一条问题。'; return; }
   var base={skill_id:k.id,questions:qs,inputs:collectInputs(),
-    role:(document.getElementById('roleSel')||{value:''}).value,
-    scope:(document.getElementById('scopeSel')||{value:''}).value,
+    role:k.role||'',
+    scope:k.scope||'',
     model:document.getElementById('model').value};
   function go(el,useDoc){
     document.getElementById(el).textContent='跑中…（两边同时跑）';
@@ -210,8 +212,8 @@ function runSkill(){
   var qs=collectQs();
   if(!qs.length){ b.disabled=false; b.textContent='触发这个技能'; document.getElementById('answer').textContent='至少勾一条问题。'; return; }
   var body={skill_id:k.id,model:document.getElementById('model').value,questions:qs,
-        role:(document.getElementById('roleSel')||{value:''}).value,
-        scope:(document.getElementById('scopeSel')||{value:''}).value,inputs:collectInputs()};
+        role:k.role||'',
+        scope:k.scope||'',inputs:collectInputs()};
   if(k.trigger==='state'){
     var o=TORDERS[parseInt((document.getElementById('scOrder')||{value:'0'}).value,10)]||{};
     var r=TRULES[parseInt((document.getElementById('scRule')||{value:'0'}).value,10)]||{};

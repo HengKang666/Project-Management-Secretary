@@ -13,7 +13,7 @@ import tools_db
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.join(os.path.dirname(HERE), 'skills')   # 技能文档放在仓库根 skills/，跨服务复用
-SKILL_DOC = os.path.join(SKILL_DIR, '年度缺陷治理计划分析.md')
+SKILL_DOC = os.path.join(SKILL_DIR, '预算分配.md')
 TABLE_DOC = os.path.join(SKILL_DIR, '数据表说明书.md')
 RULE_DOC = os.path.join(SKILL_DIR, '判据规则.md')
 
