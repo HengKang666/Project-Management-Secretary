@@ -1,13 +1,31 @@
 # 智能问数服务 · Python 依赖
 #
 # 主服务（问答）本身只额外依赖 pymysql；**其它全是标准库**。
-# 知识库那组接口（/api/kb/**）才需要阿里云 SDK 与 requests；
-# 不装它们也能正常问答，只是 /api/kb/** 会返回 503 并说明原因。
+# 下面两组都是「附属能力」，**装不上不影响问答**：
+#   - 知识库云端接口（/api/kb/**）→ 没装返 503 并说明原因
+#   - 文件预览抽取（/api/kb/files/**）→ 没装则上传照旧成功，只是预览取不到正文
+#
+# 装机命令（阿里云 ECS 建议走内网镜像）：
+#   pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 
 pymysql>=1.1.0
 
-# ---- 知识库（阿里云百炼开放接口）----
+# ---- 知识库 · 阿里云百炼开放接口（列表/上传/删除）----
 alibabacloud_bailian20231229>=1.10.0
 alibabacloud_tea_openapi
 alibabacloud_tea_util
 requests>=2.31.0
+
+# ---- 知识库 · 文件 → HTML 富文本（4.1 新增，前端预览用）----
+# 每种格式各自独立：缺哪个只影响那种格式，其余照常（extract_status=unsupported 并写明缺什么）。
+mammoth>=1.8.0          # DOCX → HTML（表格会输出真正的 <table>，比转 Markdown 强）
+openpyxl>=3.1.0         # XLSX，每个 sheet 一页
+markdown>=3.5           # PDF：pymupdf4llm 产出的 Markdown → HTML
+pymupdf4llm>=0.0.10     # PDF → 按页 Markdown ★ 体积较大（会带 onnxruntime）
+                        #   装不动就退回纯 pymupdf（正文能看，但丢表格结构）
+pymupdf>=1.24.0         # PDF 退路 + pymupdf4llm 的底层依赖
+python-pptx>=1.0.0      # PPTX，每张 slide 一页（可选）
+
+# ★ HTML 白名单清洗（防 XSS）—— 必须有，二选一，两个都没有则抽取直接报错、不落未清洗的 HTML
+nh3>=0.2.0              # 首选：Rust 实现，快、在维护
+bleach>=6.0.0           # 备选：纯 Python，任何平台都装得上

@@ -57,6 +57,12 @@ WorkingDirectory=$SEC
 Environment=SECRETARY_HOST=0.0.0.0
 Environment=SECRETARY_PORT=$PORT
 Environment=PYTHONIOENCODING=utf-8
+# ★ 检索面：问答与补全检索哪些知识库（逗号分隔，可多个）。
+#   这些库必须**已经在百炼控制台加进该检索服务的绑定范围**，否则调用会 401。
+#   改完要执行： systemctl daemon-reload && systemctl restart secretary
+#   安装时想临时换检索服务/库： SECRETARY_KB_IDS=xxx bash install_service.sh
+Environment=SECRETARY_KB_AGENT=${SECRETARY_KB_AGENT:-aid-72fa8cae2b124d819617f157e97d0a1d}
+Environment=SECRETARY_KB_IDS=${SECRETARY_KB_IDS:-r57xtq9ypm,razubo7dra}
 # 用 bash 重定向写日志，而不是 StandardOutput=append:path ——
 # 「append:」是 systemd v240+ 才有的语法，CentOS 7（v219）上会直接启动失败。
 # 包一层 bash 就与 systemd 版本无关了。

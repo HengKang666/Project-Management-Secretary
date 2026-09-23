@@ -216,8 +216,7 @@ def _save_sync(result, sid, user_id, user_code, client_ip, channel):
                     'steps': result.get('trace') or [], 'ok': True}
         except pymysql.err.IntegrityError as e:
             last_err = e                          # 多半是 seq_no 撞了，重试一次
-        except Exception as e:                    # noqa: BLE001
-            raise
+            # 其余异常不接：让它照原样抛出去（外层本来就要求"落库失败不影响回答"）
         finally:
             c.close()
     raise last_err or RuntimeError('落库失败')
@@ -288,43 +287,102 @@ def load_context(session_id, limit=5, answer_chars=400):
         c.close()
 
 
-def list_sessions(user_code=None, limit=20, offset=0):
-    """历史对话列表：一行一场会话，按最后活动时间倒序。"""
-    limit = max(1, min(int(limit or 20), 200))
+def norm_limit(value):
+    """把接口传进来的 limit 规范化。
+
+    约定（与《接口对接说明.md》一致）：
+      - 不传 / 空 / 0 / 负数 → **None，表示不限制**（返回符合条件的全部）
+      - 正整数              → 该值，表示分页取前 N 条
+
+    ★ 注意别写成 `int(value or 0) or None` 那种简写 —— 那样 `limit=0` 会被当成"没传"，
+      而这里 `limit=0` 恰恰是"全部"的显式写法。
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _cap(limit, total, max_rows):
+    """算出最终要用的 LIMIT 与是否被防呆上限截断。
+
+    limit=None 表示"全部"：此时用 max_rows 兜底，总数超过它就是被截断了。
+    limit>0 是调用方自己选的分页，不算截断。
+    """
+    max_rows = int(max_rows or config.API_MAX_ROWS or 5000)
+    if limit is None:
+        return max_rows, total > max_rows
+    return limit, False
+
+
+def list_sessions(user_code=None, limit=None, offset=0, max_rows=None):
+    """历史对话列表：一行一场会话，按最后活动时间倒序。
+
+    limit=None（不传）= **全部返回**；limit>0 = 分页。默认不再有 200 条的硬上限。
+
+    返回 dict（不再只返回行列表）：
+      total     符合条件的**总数**（不受 limit/offset 影响）
+      returned  本次实际返回的条数
+      limit     实际生效的条数上限（全部返回时等于防呆上限）
+      offset    偏移
+      truncated 是否因为超过防呆上限（config.API_MAX_ROWS）被截断
+
+    ★ total 必须单独 COUNT 一次。之前的实现把这个字段填成了"本页条数"，
+      前端拿到 total=20 会以为库里总共只有 20 场会话。
+    """
+    limit = norm_limit(limit)
     offset = max(0, int(offset or 0))
-    sql = ('SELECT s.session_id, s.user_code, s.title, s.ai_model, s.channel, s.client_ip, '
-           '       s.msg_count, s.status, s.create_time, s.last_msg_at, s.ended_at, '
-           '       (SELECT COUNT(*) FROM t_chat_query_trace q '
-           '         WHERE q.chat_session_id = s.session_id AND q.deleted_flag=0) AS ask_count, '
-           '       (SELECT COUNT(*) FROM t_chat_query_trace q '
-           '         WHERE q.chat_session_id = s.session_id AND q.is_gap=1 AND q.deleted_flag=0) AS gap_count '
-           'FROM t_chat_session s WHERE s.deleted_flag=0')
-    params = []
+    where, params = ' WHERE s.deleted_flag=0', []
     if user_code:
-        sql += ' AND s.user_code = %s'
+        where += ' AND s.user_code = %s'
         params.append(user_code)
-    sql += ' ORDER BY COALESCE(s.last_msg_at, s.create_time) DESC, s.id DESC LIMIT %s OFFSET %s'
-    params += [limit, offset]
     c = _conn()
     try:
         cur = c.cursor()
-        cur.execute(sql, params)
+        cur.execute('SELECT COUNT(*) AS n FROM t_chat_session s' + where, params)
+        total = int(cur.fetchone()['n'])
+        limit, truncated = _cap(limit, total, max_rows)
+        # 原来每行挂两个相关子查询（N 行 = 2N 次查询）；改成一个 LEFT JOIN + GROUP BY，
+        # 一次性把每场会话的问答数/缺口数算好再关联。放开 limit 全量取时这是数量级的差别。
+        sql = ('SELECT s.session_id, s.user_code, s.title, s.ai_model, s.channel, s.client_ip, '
+               '       s.msg_count, s.status, s.create_time, s.last_msg_at, s.ended_at, '
+               '       COALESCE(t.ask_count, 0) AS ask_count, '
+               '       COALESCE(t.gap_count, 0) AS gap_count '
+               'FROM t_chat_session s '
+               'LEFT JOIN (SELECT chat_session_id, '
+               '                  COUNT(*) AS ask_count, '
+               '                  SUM(CASE WHEN is_gap = 1 THEN 1 ELSE 0 END) AS gap_count '
+               '           FROM t_chat_query_trace WHERE deleted_flag = 0 '
+               '           GROUP BY chat_session_id) t '
+               '       ON t.chat_session_id = s.session_id' + where +
+               ' ORDER BY COALESCE(s.last_msg_at, s.create_time) DESC, s.id DESC LIMIT %s OFFSET %s')
+        cur.execute(sql, params + [limit, offset])
         rows = cur.fetchall()
         for r in rows:                            # datetime → 字符串，便于 JSON 输出
             for k in ('create_time', 'last_msg_at', 'ended_at'):
                 if r.get(k) is not None:
                     r[k] = str(r[k])
-        return rows
+        return {'total': total, 'returned': len(rows), 'limit': limit, 'offset': offset,
+                'truncated': truncated, 'sessions': rows}
     finally:
         c.close()
 
 
-def get_history(session_id, limit=200, with_steps=False):
+def get_history(session_id, limit=None, with_steps=False, max_rows=None):
     """某场会话的历史对话记录：消息 + 每条 AI 回答对应的口径/质量信息。
 
     消息与 trace 是 **LEFT JOIN** —— 用户那条消息没有 trace，不能丢。
+
+    limit=None（不传）= **全部返回**；limit>0 = 取前 N 条（按 seq_no 正序，即最早的 N 条）。
+    返回 dict：total 是这场会话的消息**总数**，returned 是本次实际返回条数，
+    truncated 表示是否被防呆上限（config.API_MAX_ROWS）截断。默认不再有 1000 条的硬上限。
     """
-    limit = max(1, min(int(limit or 200), 1000))
+    limit = norm_limit(limit)
     c = _conn()
     try:
         cur = c.cursor()
@@ -337,6 +395,11 @@ def get_history(session_id, limit=200, with_steps=False):
         for k in ('create_time', 'last_msg_at', 'ended_at'):
             if session.get(k) is not None:
                 session[k] = str(session[k])
+        # total = 这场会话的消息总数（不是本页条数）；再用防呆上限算出本次实际取多少。
+        cur.execute('SELECT COUNT(*) AS n FROM t_chat_message '
+                    'WHERE chat_session_id=%s AND deleted_flag=0', (session_id,))
+        total = int(cur.fetchone()['n'])
+        limit, truncated = _cap(limit, total, max_rows)
         cur.execute(
             'SELECT m.id, m.seq_no, m.direction, m.sender_type, m.sender_id, m.reply_to_id, '
             '       m.msg_type, m.content, m.model, m.latency_ms, m.create_time, '
@@ -368,7 +431,138 @@ def get_history(session_id, limit=200, with_steps=False):
             for m in msgs:
                 if m.get('qa_id'):
                     m['steps'] = steps.get(m['qa_id'], [])
-        return {'session': session, 'total': len(msgs), 'messages': msgs}
+        return {'session': session, 'total': total, 'returned': len(msgs),
+                'limit': limit, 'truncated': truncated, 'messages': msgs}
+    finally:
+        c.close()
+
+
+# ---------------------------------------------------------------- L2 会话摘要
+#
+# 表结构：t_chat_session.summary / summary_upto_seq / summary_time（见 tools/kb_file_schema.sql）
+# 语义：summary 覆盖到「第 summary_upto_seq 条消息（按 t_chat_message.seq_no）为止」；
+#       往提示里注入时只取 seq_no > summary_upto_seq 的轮次，避免摘要与明细重复。
+#
+# ★ 为什么不把"过滤"做进 load_context：load_context 还兼着「时间/地点沿用上一轮」的活，
+#   那条链路**必须能看到紧邻的上一轮**，哪怕它已经被摘要覆盖。所以过滤放在 agent 层做。
+
+def get_summary(session_id):
+    """取某场会话的摘要。返回 {'summary','upto_seq','time'}；没有就给空值。"""
+    if not session_id:
+        return {'summary': '', 'upto_seq': 0, 'time': None}
+    c = _conn()
+    try:
+        cur = c.cursor()
+        cur.execute('SELECT summary, summary_upto_seq, summary_time FROM t_chat_session '
+                    'WHERE session_id=%s AND deleted_flag=0', (session_id,))
+        r = cur.fetchone()
+    finally:
+        c.close()
+    if not r:
+        return {'summary': '', 'upto_seq': 0, 'time': None}
+    return {'summary': (r.get('summary') or '').strip(),
+            'upto_seq': int(r.get('summary_upto_seq') or 0),
+            'time': str(r.get('summary_time')) if r.get('summary_time') else None}
+
+
+def set_summary(session_id, summary, upto_seq, expect_upto=None):
+    """写回摘要。**带乐观锁**：给了 `expect_upto` 就要求当前值仍等于它。
+
+    为什么需要锁：摘要跑在后台线程，同一场会话可能有两个任务同时在跑
+    （用户连着问几句会触发两次）。没有锁，后写的会盖掉先写的，
+    summary_upto_seq 也会乱跳 —— 结果就是"摘要和明细对不上"。
+    """
+    c = _conn()
+    try:
+        cur = c.cursor()
+        sql = ('UPDATE t_chat_session SET summary=%s, summary_upto_seq=%s, summary_time=NOW() '
+               'WHERE session_id=%s')
+        params = [summary, int(upto_seq), session_id]
+        if expect_upto is not None:
+            sql += ' AND summary_upto_seq=%s'
+            params.append(int(expect_upto))
+        cur.execute(sql, params)
+        return cur.rowcount
+    finally:
+        c.close()
+
+
+def turns_after(session_id, after_seq=0, limit=40, answer_chars=300):
+    """取 seq_no > after_seq 的问答轮次（旧的在前），供摘要使用。
+
+    只取「有 AI 回答」的轮次（靠 trace 关联），正在进行的这轮不会混进来。
+    """
+    if not session_id:
+        return []
+    c = _conn()
+    try:
+        cur = c.cursor()
+        cur.execute(
+            'SELECT m.seq_no, q.raw_question, q.fixed_question, q.place, q.time_text, '
+            '       m.content AS answer '
+            'FROM t_chat_message m '
+            'JOIN t_chat_query_trace q ON q.message_id = m.id AND q.deleted_flag = 0 '
+            'WHERE m.chat_session_id=%s AND m.deleted_flag=0 AND m.sender_type=2 '
+            '  AND m.seq_no > %s '
+            'ORDER BY m.seq_no LIMIT %s', (session_id, int(after_seq or 0), int(limit)))
+        rows = cur.fetchall()
+        for r in rows:
+            r['answer'] = (r.get('answer') or '')[:answer_chars]
+        return rows
+    finally:
+        c.close()
+
+
+def unsummarized_count(session_id):
+    """还没被摘要覆盖的问答轮数 —— 攒够阈值才触发摘要（不是每轮都烧一次模型）。"""
+    if not session_id:
+        return 0
+    c = _conn()
+    try:
+        cur = c.cursor()
+        cur.execute(
+            'SELECT COUNT(*) AS n FROM t_chat_message m '
+            'JOIN t_chat_session s ON s.session_id = m.chat_session_id '
+            'WHERE m.chat_session_id=%s AND m.deleted_flag=0 AND m.sender_type=2 '
+            '  AND m.seq_no > COALESCE(s.summary_upto_seq, 0)', (session_id,))
+        return int(cur.fetchone()['n'])
+    finally:
+        c.close()
+
+
+def count_turns(session_id):
+    """这场会话一共有多少轮问答（只数有 AI 回答的那一侧）。
+
+    用途：判断会话够不够长、值不值得注入【本场会话摘要】——
+    短会话的 history 已经把全场带上了，再注入摘要是重复（见 agent._summary_worth_it）。
+    """
+    if not session_id:
+        return 0
+    c = _conn()
+    try:
+        cur = c.cursor()
+        cur.execute('SELECT COUNT(*) AS n FROM t_chat_message '
+                    'WHERE chat_session_id=%s AND deleted_flag=0 AND sender_type=2',
+                    (session_id,))
+        return int(cur.fetchone()['n'])
+    finally:
+        c.close()
+
+
+def sessions_needing_summary(every=5, limit=20):
+    """找出「未摘要轮数 >= every」的会话（服务重启后补跑用）。"""
+    c = _conn()
+    try:
+        cur = c.cursor()
+        cur.execute(
+            'SELECT s.session_id, '
+            '       (SELECT COUNT(*) FROM t_chat_message m '
+            '         WHERE m.chat_session_id = s.session_id AND m.deleted_flag=0 '
+            '           AND m.sender_type=2 AND m.seq_no > COALESCE(s.summary_upto_seq, 0)) AS pending '
+            'FROM t_chat_session s WHERE s.deleted_flag=0 '
+            'HAVING pending >= %s ORDER BY s.last_msg_at DESC LIMIT %s',
+            (int(every), int(limit)))
+        return [r['session_id'] for r in cur.fetchall()]
     finally:
         c.close()
 
@@ -416,6 +610,7 @@ if __name__ == '__main__':
     print('状态：', status())
     if _enabled() and status()['available']:
         print('统计：', stats())
-        print('\n最近 5 场会话：')
-        for s in list_sessions(limit=5):
+        r = list_sessions(limit=5)
+        print('\n最近 5 场会话（库里共 %d 场）：' % r['total'])
+        for s in r['sessions']:
             print('   %s | %s | %s 问 | %s' % (s['session_id'], s['title'], s['ask_count'], s['last_msg_at']))

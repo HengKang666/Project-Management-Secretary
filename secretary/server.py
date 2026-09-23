@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import agent
 import tools_asr
@@ -69,6 +69,52 @@ def _preheat():
                   % (type(e).__name__, e), flush=True)
     threading.Thread(target=warm_semantic, daemon=True, name='semantic-preheat').start()
 
+    def resume_kb_extract():
+        """把上次没抽完的知识库文件重新排队。
+
+        为什么需要：抽取是**异步**的（大 PDF 要几十秒到几分钟），
+        进程重启会让队列里的任务丢掉。台账里 `pending / extracting` 的行就是"没抽完的"，
+        启动时扫一遍重新投递 —— 否则那些文件会永远停在"抽取中"，前端一直转圈。
+        """
+        try:
+            import kb_store
+            n = kb_store.recover()
+            st = kb_store.status()
+            print('[启动] 文件台账%s（%s，已存 %s 个文件，本次恢复 %d 个待抽取）%s'
+                  % ('就绪' if st.get('available') else '未就绪', st.get('source', '?'),
+                     st.get('files', 0), n,
+                     '' if st.get('available') else '：' + st.get('reason', '')),
+                  flush=True)
+        except Exception as e:                    # noqa: BLE001
+            print('[启动] 文件台账不可用（不影响问答与上传，只是没有本地副本/预览）：%s: %s'
+                  % (type(e).__name__, e), flush=True)
+        # 异步上传任务：把上次中断的标成 failed（**不自动重试**：上传链路不幂等，重试会造重复文档）
+        try:
+            import kb_upload
+            n = kb_upload.recover()
+            st = kb_upload.status()
+            print('[启动] 异步上传%s（%s，历史任务 %s，本次标记中断 %d 个）%s'
+                  % ('就绪' if st.get('available') else '未就绪', st.get('source', '?'),
+                     st.get('by_status', {}), n,
+                     '' if st.get('available') else '：' + st.get('reason', '')),
+                  flush=True)
+        except Exception as e:                    # noqa: BLE001
+            print('[启动] 异步上传不可用（同步上传不受影响）：%s: %s' % (type(e).__name__, e), flush=True)
+        # L2 会话摘要：把「攒够轮数但还没摘要」的会话补跑一遍。
+        # 摘要可以安全重跑（读同一批轮次 + 乐观锁写回），所以中断后自动补上没问题。
+        try:
+            import session_summary
+            st = session_summary.status()
+            n = session_summary.recover() if st.get('available') else 0
+            print('[启动] 会话摘要%s（%s，每 %d 轮触发一次，本次补跑 %d 场）%s'
+                  % ('就绪' if st.get('available') else '未启用', st.get('source', '?'),
+                     st.get('every', 0), n,
+                     '' if st.get('available') else '：' + st.get('reason', '')),
+                  flush=True)
+        except Exception as e:                    # noqa: BLE001
+            print('[启动] 会话摘要不可用（不影响问答）：%s: %s' % (type(e).__name__, e), flush=True)
+    threading.Thread(target=resume_kb_extract, daemon=True, name='kb-extract-resume').start()
+
 
 def _lan_ips():
     """本机的局域网地址，打印出来直接发给同事。"""
@@ -92,6 +138,12 @@ def _lan_ips():
 class H(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
+    # 上一次 _read_json 的解析错误（None = 正常）。
+    # 为什么要有它：_read_json 故意"宽容"（解析失败返 {}），这样调用方不用层层判空；
+    # 但**业务接口需要知道"是没传 body 还是 body 是坏的"** —— 否则传了坏 JSON 会得到
+    # 「问题为空」这种误导性的 200。需要严格判定的接口读它并返 400。
+    _json_error = None
+
     def _send(self, code, body, ctype):
         b = body.encode('utf-8') if isinstance(body, str) else body
         self.send_response(code)
@@ -102,19 +154,22 @@ class H(BaseHTTPRequestHandler):
 
     @staticmethod
     def _health():
-        """ok 只说明服务活着；name_fix / qa_log / kb 才说明三个「附属能力」动没动。
+        """ok 只说明服务活着；下面这些字段才说明各个「附属能力」动没动。
 
-        这几个都可能静默失效：
-        - name_fix：词典默认从 agent_data 的 t_nc_* 表读（SECRETARY_LEXICON=db），
-                    表没建 / 表是空的 / 连不上 → 错字纠正静默不生效；
-                    改成 file 模式时，则是 libs 下的 data/ 缺失
-        - qa_log  ：记录库没建表 / 连不上 → 问答照答，但对话记录静默不落库
-        - kb      ：知识库的 SDK 没装 / 凭据没配 → /api/kb/** 全返 503（**不连云**，
-                    只看依赖与配置；真正的连通性用 GET /api/kb/health 检查）
-        不报出来就没人发现得了，所以都在这里暴露，并带上各自的 _source。
+        它们都可能静默失效，所以全部在这暴露，并带上各自的 _source：
+        - name_fix ：词典默认从 agent_data 的 t_nc_* 表读（SECRETARY_LEXICON=db），
+                     表没建 / 表是空的 / 连不上 → 错字纠正静默不生效
+        - qa_log   ：记录库没建表 / 连不上 → 问答照答，但对话记录静默不落库
+        - kb       ：知识库 SDK 没装 / 凭据没配 → /api/kb/** 全返 503（**不连云**，
+                     只看依赖与配置；真正的连通性用 GET /api/kb/health 检查）
+        - kb_files ：文件台账表没建 / 连不上 → 上传仍成功，但**没有本地副本、没有预览**
+        - kb_upload：异步上传任务表没建 / 连不上 → `?async=1` 会失败（同步上传不受影响）
+        - session_summary：L2 会话摘要。开关关掉（SECRETARY_SESSION_SUMMARY=0）时它算
+                     **未启用**而不是故障 —— 所以这里只看 available，不看原因
         """
         out = {'ok': True, 'model': agent.config.MODEL}
-        for mod, key in (('name_fix', 'name_fix'), ('qa_log', 'qa_log'), ('kb_api', 'kb')):
+        for mod, key in (('name_fix', 'name_fix'), ('qa_log', 'qa_log'),
+                         ('kb_api', 'kb'), ('kb_store', 'kb_files'), ('kb_upload', 'kb_upload')):
             try:
                 m = __import__(mod)
                 st = m.status()
@@ -126,6 +181,17 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:              # noqa: BLE001
                 out[key] = False
                 out[key + '_reason'] = '%s: %s' % (type(e).__name__, e)
+        try:
+            import session_summary
+            st = session_summary.status()
+            out['session_summary'] = bool(st.get('available'))
+            if not st.get('available'):
+                out['session_summary_reason'] = st.get('reason', '')
+            elif st.get('source'):
+                out['session_summary_source'] = st['source']
+        except Exception as e:                  # noqa: BLE001
+            out['session_summary'] = False
+            out['session_summary_reason'] = '%s: %s' % (type(e).__name__, e)
         return out
 
     def _query(self):
@@ -142,14 +208,67 @@ class H(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200):
         self._send(code, json.dumps(obj, ensure_ascii=False, default=str), 'application/json')
 
+    # ---------------------------------------------------------------- 兜底
     def do_GET(self):
+        try:
+            self._do_get()
+        except Exception as e:                  # noqa: BLE001
+            self._fail(e)
+
+    def do_POST(self):
+        try:
+            self._do_post()
+        except Exception as e:                  # noqa: BLE001
+            self._fail(e)
+
+    def _fail(self, e):
+        """兜底：任何**没被各 handler 预料到**的异常，都回一个 500 JSON 并打日志。
+
+        为什么需要：`BaseHTTPRequestHandler` 不会替我们兜异常 —— 一旦漏出来，
+        客户端只会看到"连接被重置 / 空响应"，服务端日志里也就一行 traceback，
+        排查时基本没有线索。宁可回一个明确的 500，也不要静默掐连接。
+        """
+        msg = '%s: %s' % (type(e).__name__, str(e)[:300])
+        print('[server] 未预料的异常：' + msg, flush=True)
+        try:
+            self._send_json({'error': '服务内部错误：' + msg}, 500)
+        except Exception:                       # noqa: BLE001
+            pass                                # 响应头可能已经发出去，这时只能放弃
+
+    def _send_static(self, relpath, ctype):
+        """发一个**静态页面**（相对 HERE）；文件缺失返 404（而不是让 open() 抛出去变成 500）。
+
+        ★ 名字不能叫 `_send_file` —— 那个已被"流式下发知识库原文件"占用
+        （它带 Content-Disposition: attachment），重名会让页面变成"被下载"。
+        """
+        fp = os.path.join(HERE, relpath)
+        try:
+            with open(fp, encoding='utf-8') as f:
+                self._send(200, f.read(), ctype)
+        except FileNotFoundError:
+            self._send(404, 'file not found: ' + relpath, 'text/plain')
+
+    @staticmethod
+    def _int_arg(query, key, default):
+        """从 query string 里安全取一个整数参数（非法值退回默认，不抛异常）。
+
+        直接用 `int(...)` 会让 `/api/gaps?limit=abc` 这种请求把服务打成 500 ——
+        那是调用方传错，不该算服务端故障。复用已有的 parse_qs，不必再引 re。
+        """
+        vals = parse_qs(query or '').get(key) or []
+        if not vals:
+            return default
+        try:
+            return int(vals[0])
+        except (TypeError, ValueError):
+            return default
+
+    def _do_get(self):
         path = self.path.split('?')[0]
         if path in ('/', '/index.html'):
-            with open(os.path.join(HERE, 'static', 'index.html'), encoding='utf-8') as f:
-                self._send(200, f.read(), 'text/html')
+            self._send_static('static/index.html', 'text/html')
         elif path in ('/asr', '/asr.html'):
-            with open(os.path.join(HERE, 'static', 'asr.html'), encoding='utf-8') as f:
-                self._send(200, f.read(), 'text/html')
+            self._send_static('static/asr.html', 'text/html')
         elif path == '/health':
             self._send(200, json.dumps(self._health()), 'application/json')
         elif path == '/api/asr/sample':
@@ -161,7 +280,7 @@ class H(BaseHTTPRequestHandler):
                 self._send(404, 'sample not found', 'text/plain')
         elif path == '/api/gaps':
             import gaps as gapsmod
-            rows = gapsmod.list_gaps(int((self.path.split('limit=') + ['200'])[1]) if 'limit=' in self.path else 200)
+            rows = gapsmod.list_gaps(self._int_arg(self.path, 'limit', 200))
             self._send(200, json.dumps({'total': len(rows), 'rows': rows}, ensure_ascii=False), 'application/json')
         elif path == '/api/report/meta':
             import report as reportmod
@@ -186,12 +305,11 @@ class H(BaseHTTPRequestHandler):
             self._handle_kb('GET')
         elif path in ('/kb', '/kb.html'):
             # 知识库控制台页面（上传/删除文档，给同事用）
-            with open(os.path.join(HERE, 'static', 'kb.html'), encoding='utf-8') as f:
-                self._send(200, f.read(), 'text/html')
+            self._send_static('static/kb.html', 'text/html')
         else:
             self._send(404, 'not found', 'text/plain')
 
-    def do_POST(self):
+    def _do_post(self):
         path = self.path.split('?')[0]
         if path.startswith('/api/kb/'):
             # 上传文档：multipart/form-data 与裸二进制都支持（见 kb_api._upload）
@@ -213,6 +331,9 @@ class H(BaseHTTPRequestHandler):
             self._send(404, 'not found', 'text/plain')
             return
         data = self._read_json()
+        if self._json_error:
+            self._send_json({'error': '请求体不是合法 JSON：' + self._json_error}, 400)
+            return
         q = (data.get('question') or '').strip()
         model = data.get('model') or None
         if not q:
@@ -246,18 +367,28 @@ class H(BaseHTTPRequestHandler):
     # ------------------------------------------------ 历史会话相关
 
     def _handle_sessions(self):
-        """历史对话列表。query: uid / limit / offset"""
+        """历史对话列表。query: uid / limit / offset
+
+        **limit 不传（或传 0）= 全部返回** —— 只受 config.API_MAX_ROWS 防呆上限保护，
+        真被截断时响应里带 truncated=true。limit>0 才是分页取前 N 条。
+        响应里 total 是符合条件的**总数**，returned 是本次实际返回条数。
+        """
         q = self._query()
         try:
             import qa_log
-            rows = qa_log.list_sessions(user_code=q.get('uid') or q.get('user_code'),
-                                        limit=q.get('limit') or 20, offset=q.get('offset') or 0)
-            self._send_json({'total': len(rows), 'sessions': rows})
+            r = qa_log.list_sessions(user_code=q.get('uid') or q.get('user_code'),
+                                     limit=q.get('limit'), offset=q.get('offset') or 0)
+            self._send_json(r)
         except Exception as e:                  # noqa: BLE001
-            self._send_json({'total': 0, 'sessions': [], 'error': '%s: %s' % (type(e).__name__, str(e)[:200])})
+            self._send_json({'total': 0, 'returned': 0, 'limit': 0, 'offset': 0,
+                             'truncated': False, 'sessions': [],
+                             'error': '%s: %s' % (type(e).__name__, str(e)[:200])})
 
     def _handle_history(self):
-        """某场会话的历史对话记录。query: session_id（必填）/ limit / with_steps=1"""
+        """某场会话的历史对话记录。query: session_id（必填）/ limit / with_steps=1
+
+        limit 不传（或传 0）= 全部返回（同样受防呆上限保护）。
+        """
         q = self._query()
         sid = (q.get('session_id') or q.get('session') or '').strip()
         if not sid:
@@ -265,7 +396,7 @@ class H(BaseHTTPRequestHandler):
             return
         try:
             import qa_log
-            r = qa_log.get_history(sid, limit=q.get('limit') or 200,
+            r = qa_log.get_history(sid, limit=q.get('limit'),
                                    with_steps=str(q.get('with_steps') or '') in ('1', 'true', 'yes'))
             if r is None:
                 self._send_json({'error': 'session 不存在', 'session_id': sid}, 404)
@@ -285,9 +416,20 @@ class H(BaseHTTPRequestHandler):
     def _handle_feedback(self):
         """给某次回答打评价。body: {qa_id, feedback(1赞/0踩), note?}"""
         data = self._read_json()
+        if self._json_error:
+            self._send_json({'error': '请求体不是合法 JSON：' + self._json_error}, 400)
+            return
         qa_id = data.get('qa_id')
         if qa_id in (None, ''):
             self._send_json({'error': '缺少 qa_id（取 /api/ask 返回里的 qa_id）'}, 400)
+            return
+        # ★ 必须在这里挡住非法值：qa_log.set_feedback 内部会 int(qa_id)，
+        #   传 "nope" 这种会抛 ValueError，被下面的兜底 except 当成 500 ——
+        #   那是**调用方传错**，不是服务端故障，应当 400（返 500 会把排查方向带错）。
+        try:
+            qa_id = int(qa_id)
+        except (TypeError, ValueError):
+            self._send_json({'error': 'qa_id 必须是整数（取 /api/ask 返回里的 qa_id）'}, 400)
             return
         try:
             fb = int(data.get('feedback'))
@@ -302,10 +444,22 @@ class H(BaseHTTPRequestHandler):
             self._send_json({'error': '%s: %s' % (type(e).__name__, str(e)[:200])}, 500)
 
     def _read_json(self):
+        """解析 JSON 请求体。**解析失败返 {}**（宽容，调用方不必层层判空），
+        同时把错误记到 `self._json_error`，需要严格判定的接口据此返 400。
+
+        注意区分两种情况：
+          - body 为空            → 返 {}，`_json_error` 仍是 None（很多接口允许空 body）
+          - body 不是合法 JSON   → 返 {}，`_json_error` 非空
+        """
+        self._json_error = None
         n = int(self.headers.get('Content-Length') or 0)
+        raw = self.rfile.read(n)
+        if not raw:
+            return {}
         try:
-            return json.loads(self.rfile.read(n).decode('utf-8') or '{}')
-        except Exception:
+            return json.loads(raw.decode('utf-8'))
+        except Exception as e:                  # noqa: BLE001
+            self._json_error = '%s: %s' % (type(e).__name__, str(e)[:120])
             return {}
 
     def _handle_notice(self):
@@ -357,6 +511,12 @@ class H(BaseHTTPRequestHandler):
     # ------------------------------------------------ 知识库（阿里云百炼）
 
     def do_DELETE(self):
+        try:
+            self._do_delete()
+        except Exception as e:                  # noqa: BLE001
+            self._fail(e)
+
+    def _do_delete(self):
         path = self.path.split('?')[0]
         if path.startswith('/api/kb/'):
             self._handle_kb('DELETE')
@@ -383,8 +543,39 @@ class H(BaseHTTPRequestHandler):
             self._send_json({'error': 'not found'}, 404)
             return
         status, payload = r
+        # 下载原文件：payload 里带 __file__ 时走流式下发，不是 JSON
+        if isinstance(payload, dict) and payload.get('__file__'):
+            self._send_file(status, payload['__file__'], payload.get('name'), payload.get('ctype'))
+            return
         self._send(status, json.dumps(payload, ensure_ascii=False, default=str),
                    'application/json')
+
+    def _send_file(self, code, path, name=None, ctype=None):
+        """流式下发磁盘上的原文件（GET /api/kb/files/{file_id}/download）。
+
+        分块读 + 预声明 Content-Length：大文件不占内存，前端也能显示下载进度。
+        """
+        try:
+            size = os.path.getsize(path)
+        except OSError as e:
+            self._send_json({'error': '原文件读不到：%s' % e}, 404)
+            return
+        self.send_response(code)
+        self.send_header('Content-Type', ctype or 'application/octet-stream')
+        self.send_header('Content-Length', str(size))
+        # 中文文件名必须用 filename*（RFC 5987）编码，否则浏览器拿到的是乱码
+        self.send_header('Content-Disposition',
+                         "attachment; filename*=UTF-8''" + quote(name or os.path.basename(path)))
+        self.end_headers()
+        try:
+            with open(path, 'rb') as f:
+                while True:
+                    buf = f.read(64 * 1024)
+                    if not buf:
+                        break
+                    self.wfile.write(buf)
+        except (BrokenPipeError, ConnectionResetError):
+            pass                                          # 客户端中途断开，不算错误
 
     def log_message(self, *a):
         pass
