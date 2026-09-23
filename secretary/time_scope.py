@@ -286,20 +286,39 @@ def _unit_cores():
     return _UNIT_CORES['list']
 
 
+# 地点层的类别（供电所 / 公司 / 服务站）。台区是**对象层**，单独处理，见 place_of。
+_PLACE_KINDS = ('', '供电公司', '供电所', '供电服务站')
+
+
 def place_of(fixed, question=''):
-    """从纠错结果里取地点；一个都没提到就用「全市」。
+    """从纠错结果里取地点（= 本轮的统计范围）；一个都认不出就返回空串。
 
     纠错层只报告「被改过」的名字 —— 「环潭供电所」本来就在库里，
     它一个字都不改，names/areas 都是空的。所以还要拿名单在原问题上兜一道。
+
+    ★ **台区也算地点**。库里的名字 99.7% 是台区（两万多条；供电所级只有几十条），
+      只认供电所的话，「9颗松情况怎么样」的地点会被当成「全市」，
+      下一句追问「情况怎么样，售电量，线损这些」就把「全市」沿用过去，整题答偏 ——
+      用户问的是那个台区，答出来的却是全市的数。
+      两级同时出现时取**台区**：更具体的那个才是本轮范围，
+      否则「环潭供电所九棵松台区」会被退回整个供电所，数对不上。
     """
     names = (fixed or {}).get('names') or []
     areas = (fixed or {}).get('areas') or []
+    unit_hit = ''
+    area_hit = ''
     for src in (areas, names):
         for it in src:
             nm = str(it.get('标准名') or it.get('文本') or '').strip()
+            if not nm:
+                continue
             kd = str(it.get('类别') or '')
-            if nm and kd in ('', '供电公司', '供电所', '供电服务站'):
-                return nm
+            if kd == '台区':
+                area_hit = area_hit or nm
+            elif kd in _PLACE_KINDS:
+                unit_hit = unit_hit or nm
+    if area_hit or unit_hit:
+        return area_hit or unit_hit
     # 原问题和纠错后的问题都比一遍：「凉水供电所」在纠错后是「两水供电所」，
     # 名单里存的是后者，只比原问题就认不出来。
     blob = (question or '') + ' ' + str((fixed or {}).get('text') or '')
