@@ -12,7 +12,11 @@ SSH 密码：环境变量 DEPLOY_SSH_PASS，否则取本地 .env 的 SERVER_SSH_
 **注意 .env 里的 SERVER_HOST=47.121.127.9 是已废弃的旧机**，目标机是 47.121.183.81。
 
 为什么这么写（都是踩过的坑）：
-  * 服务器上的 .env / output/ 是运行态：切换前另存、切换后放回，**不能被包覆盖**。
+  * 服务器上的 .env / output/ / kb_files/ 是运行态：切换前另存、切换后放回，**不能被包覆盖**。
+    ★ kb_files/ 是知识库文件的磁盘原文，少了它「下载原文」就废了（台账还在 → has_raw 变 false）。
+  * 上传清单（DIRS/ROOT_FILES/DEPLOY_FILES）**必须覆盖服务器上要保留的每个文件** ——
+    切换是整目录替换，不在清单里的文件等于被删掉。仓库把部署脚本挪进 deploy/ 之后，
+    按根目录找 start.sh / install_service.sh 会静默失败（实测被这样弄没过几个文件）。
   * 先整包传到 _staging 再整目录 mv 切换，避免"传一半"把线上弄成半新版。
   * 每个文件上传后立刻和本地 md5 比对，不一致即中止、**不进重启**。
   * 失败自动回滚：把 .bak 换回来再重启。
@@ -43,14 +47,25 @@ SERVICE = 'secretary'
 PORT = 8200
 KEEP_BAK = 3
 
-# 上传范围：目录整体上，根文件按名字上。deploy/*.md 落到服务器根目录。
+# 上传范围：目录整体上，根文件按名字上。deploy/ 下的脚本与文档落到服务器根目录。
 DIRS = ('secretary', 'skills', 'tools')
-ROOT_FILES = ('requirements.txt', 'start.sh', 'start.bat', 'install_service.sh', '.env.example')
-DEPLOY_DOCS = ('接口对接说明.md', '知识库接口文档.md', '技能接口文档.md', 'DEPLOY.md')
+ROOT_FILES = ('requirements.txt', '.env.example')
+# ★ 这几个文件在仓库里已经移到 deploy/ 下（早先在根目录）。
+#   只按根目录找会**静默找不到**，于是每部署一次，服务器上就少一个 —— 脚本换目录时会整体替换，
+#   不在上传清单里的文件等于被删掉。实测 15:07 那次部署就把 start.sh / install_service.sh
+#   和《知识库与历史对话_对接手册.md》一起弄没了。
+DEPLOY_FILES = ('DEPLOY.md', '部署脚本使用说明.md', '接口对接说明.md', '知识库接口文档.md',
+                '技能接口文档.md', '知识库与历史对话_对接手册.md',
+                'start.sh', 'start.bat', 'install_service.sh')
 SKIP_DIRS = {'__pycache__', '.git', '.venv', 'node_modules', 'output'}
 SKIP_SUFFIX = {'.pyc', '.pyo', '.log'}
 # 这些后缀上传前统一成 LF（Linux 上跑，避免 CRLF 带来的怪问题；.bat 必须保持 CRLF，故不列）
 LF_SUFFIX = {'.py', '.sh', '.md', '.json', '.html', '.txt', '.js', '.css', '.csv'}
+
+# 运行态目录：不在上传清单里、但**必须从旧目录搬过来**，否则会被目录切换抹掉。
+#   output/   —— 报告等产物
+#   kb_files/ —— 知识库文件的**磁盘原文**（预览「下载原文」全靠它；丢了台账还在、has_raw 变 false）
+KEEP_DIRS = ('output', 'kb_files')
 
 
 def load_pass() -> str:
@@ -115,11 +130,11 @@ def collect() -> list:
         p = ROOT / name
         if p.is_file():
             out.append((p, name))
-    for name in DEPLOY_DOCS:
+    for name in DEPLOY_FILES:
         p = ROOT / 'deploy' / name
         if p.is_file():
             out.append((p, name))
-    # 只对仓库里版本管理的两个目录做忽略过滤；根文件与 deploy 文档是按名单精挑的，不过滤
+    # 只对仓库里版本管理的两个目录做忽略过滤；根文件与 deploy 文件是按名单精挑的，不过滤
     skip = ignored([rel for _p, rel in out
                     if rel.startswith(('secretary/', 'skills/', 'tools/'))])
     if skip:
@@ -251,9 +266,11 @@ def main() -> int:
             raise RuntimeError('有 %d 个文件校验不一致，已中止（未重启）：%s' % (len(bad), bad[:5]))
         print('      %d 个文件全部一致' % len(files))
 
-        print('[4/7] 原子切换目录（保留运行态 .env / output）')
-        for name in (['output'] if args.with_env else ['output', '.env']):
-            print('      保留 %-8s %s' % (name, run(
+        print('[4/7] 原子切换目录（保留运行态 %s%s）'
+              % ('/'.join(KEEP_DIRS), '' if args.with_env else ' / .env'))
+        keep = list(KEEP_DIRS) + ([] if args.with_env else ['.env'])
+        for name in keep:
+            print('      保留 %-10s %s' % (name, run(
                 c, 'if [ -e %s/%s ]; then cp -a %s/%s %s/%s && echo ok; else echo "服务器没有，跳过"; fi'
                    % (REMOTE, name, REMOTE, name, STAGING, name))))
         if args.with_env:
