@@ -132,10 +132,42 @@ def analysis_rules(topic, question, top_k=4, limit=700):
 # 兜底：字典/提示词读不到时才用（正常情况下系统提示全部来自数据库）
 _FALLBACK = '你是随州供电公司的项目管理秘书，负责回答业务问题。'
 
+# ---------------------------------------------------------------------------
+# 规则优先级声明（2026-09-22 加，纯新增，不删任何原有规则）
+#
+# 为什么需要：system 里的通用规则会和 user 段【统计范围】撞车 —— 典型是
+# `business_rules【时间处理】`写着"未指定年份时默认使用当前年份"，而代码在多轮会话里
+# 会按"沿用上一轮"给出**别的**年份。原文任何地方都没声明谁优先，模型只能自己猜，
+# 表现就是"回答被带偏"。
+#
+# ★ 措辞必须与真实链路一致：user 段里**没有**"用户原话"！第一行是**代码做过
+#   名称纠错 + 时间地点补全之后**的问题（见 ask() 开头的 raw_question → question）。
+#   写成"以用户原话为准"会让模型去找一个**提示词里根本不存在**的参照物。
+#   这也是刻意不为原话单独开一段的原因：那会造出"同一件事两个版本"，正是要避免的病。
+#
+# 可用 SECRETARY_RULES_PRIORITY=0 关掉。
+# ---------------------------------------------------------------------------
+RULES_PRIORITY = (
+    '========== 规则优先级（冲突时一律按此顺序，前面覆盖后面） ==========\n'
+    '① 本轮问题 +【统计范围】+【名称归一说明】—— 这三样都由代码确定，**是唯一权威**：\n'
+    '   问题里的时间、地点、名称都不要再改动，不要自己推算日期，不要另立一套口径。\n'
+    '   （问题已按词典纠正过名称，请直接用它的写法，不要再改回去）\n'
+    '② 本轮检索到的业务规则切片（【补全参考】里那些）—— 它**只是参考**。\n'
+    '③ 本 system 里的各节通用规则（下面所有【】开头的小节）—— 与前两条冲突时让位。\n'
+    '④ 【本场会话摘要】与【对话历史】—— 只用来理解"本轮在问什么"，\n'
+    '   **既不是数据来源、也不是结论来源**，里面的数字和结论一律不得直接引用。\n'
+    '\n'
+    '冲突时**直接按前者执行**：不要"综合两者"，也不要在回答里出现两个版本。\n'
+)
+
 
 def _system(today=None):
     """系统提示 = 他们在 ai_prompt 里维护的提示词（config.PROMPTS 指定的 key）
     + 业务字典的表目录。**提示词不在代码里写死**。
+
+    最前面会加一段**规则优先级声明**（见 `RULES_PRIORITY`，可用
+    `SECRETARY_RULES_PRIORITY=0` 关掉）—— 因为 system 里的通用规则和 user 段的
+    【统计范围】会撞车，而原文任何地方都没声明谁优先。
     """
     parts = []
     try:
@@ -146,6 +178,8 @@ def _system(today=None):
     except Exception:
         pass
     head = '\n\n'.join(parts).strip() or _FALLBACK
+    if config.RULES_PRIORITY:
+        head = RULES_PRIORITY + '\n' + head
     # 必须给「今天」：停留天数、同比、"截至今天"全靠它。不给，同一条单两次会算出不同天数。
     head += ('\n\n今天的日期是 %s。所有「停留天数 / 截至今天」一律按这一天算，'
              '不要拿数据里的时间当今天。' % (today or time.strftime('%Y-%m-%d')))
@@ -299,6 +333,31 @@ def render_page(content, extra='', model=None, max_tokens=6000, cache_key=None):
     return html
 
 
+def _summary_worth_it(session_id):
+    """这场会话够不够长，值不值得把【本场会话摘要】注进提示。
+
+    为什么需要这道闸：`HISTORY_TURNS` 默认 5，**短会话的 history 本来就把全场带上了** ——
+    再注入一段摘要纯属重复。实测在短会话里，摘要和【对话历史】的内容几乎完全重叠。
+    阈值由 `config.SUMMARY_MIN_TURNS` 控制（默认 6，即"比 history 能覆盖的还多"才注入）。
+
+    返回 (是否注入, 不注入的原因)；统计失败时**倾向于注入**（宁可多带一点记忆，
+    也不要因为一次计数失败就把记忆丢掉）。
+    """
+    floor = int(getattr(config, 'SUMMARY_MIN_TURNS', 0) or 0)
+    if floor <= 0:
+        return True, ''
+    try:
+        import qa_log
+        n = qa_log.count_turns(session_id)
+    except Exception as e:                          # noqa: BLE001
+        print('[agent] 统计会话轮数失败（按"该注入"继续）：%s: %s'
+              % (type(e).__name__, e), flush=True)
+        return True, ''
+    if n < floor:
+        return False, '会话共 %d 轮 < SUMMARY_MIN_TURNS=%d' % (n, floor)
+    return True, ''
+
+
 def ask(question, model=None, max_steps=None, profile=None, want_page=False, today=None, scope=None,
         page_async=False, standard=None,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
@@ -361,6 +420,33 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                       'period_key': last.get('period_key'),
                       'time_text': last.get('time_text'),
                       'place': last.get('place')}
+    # ⓪·4b L2 会话摘要：更早轮次的浓缩，让「翻出旧会话继续聊」时不至于只知道最近几轮。
+    #       ★ 它**只用于注入提示**，不参与下面的「沿用上一轮口径」——
+    #         那条链路必须能看到**紧邻的上一轮**，哪怕它已经被摘要覆盖了
+    #         （否则一轮被摘要进去之后，时间/地点继承就会突然失效）。
+    #       ★ 两道闸（2026-09-22 加，都是踩过的坑）：
+    #         ① `history_turns=0` 表示"本轮完全不要记忆" —— 摘要**不能绕过这个开关溜进来**。
+    #            之前是个 bug：读摘要是无条件执行的，history 关了摘要照进。
+    #         ② 会话太短（轮数 < SUMMARY_MIN_TURNS）时 history 已覆盖全场，注入纯属重复。
+    sess_sum = {'summary': '', 'upto_seq': 0}
+    sum_skip = ''
+    if not turns:
+        sum_skip = 'history_turns=0（本轮不要记忆）'
+    elif not session_id:
+        sum_skip = '未传 session_id'
+    else:
+        _worth, _why = _summary_worth_it(session_id)
+        if not _worth:
+            sum_skip = _why
+        else:
+            try:
+                import session_summary
+                sess_sum = session_summary.get(session_id)
+            except Exception as e:                  # noqa: BLE001
+                print('[agent] 读取会话摘要失败（按无摘要继续）：%s: %s'
+                      % (type(e).__name__, e), flush=True)
+                sum_skip = '读取摘要出错'
+    sum_upto = int(sess_sum.get('upto_seq') or 0)
     # ⓪·5 时间与范围补全：相对时间词换成具体期间；没说的优先沿用上一轮，再没有才补默认值。
     #       这种换算是确定性的（「上月」是几月取决于今天），交给代码，不留给模型去猜日期。
     t_scope = time.time()
@@ -387,9 +473,26 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     t_loop = time.time()
     # 问题为准；补全结果只作参考，由模型自己判断适不适用
     user_content = question
-    if history:
+    # 已摘要覆盖的轮次由【本场会话摘要】代表，明细里就不再重复带 ——
+    # 否则同一件事讲两遍，既白烧 token，又可能让摘要与明细互相打架。
+    # ★ 但**最近 N 轮例外**：紧跟上一轮的追问（「那售电量呢」）看原话比看摘要可靠，
+    #   实测只靠摘要时 history_injected 会是 0，追问的精细度下降。
+    keep = max(0, int(getattr(config, 'SUMMARY_KEEP_RECENT', 2) or 0))
+    always = history[-keep:] if (history and keep) else []
+    hist_detail = [h for h in history
+                   if int(h.get('seq_no') or 0) > sum_upto or h in always]
+    if sess_sum.get('summary'):
+        user_content += (
+            '\n\n【本场会话摘要】（这场会话**更早轮次**的浓缩，仅作背景）\n'
+            + sess_sum['summary'] + '\n'
+            '注意三点：① 这是背景信息，**既不是数据来源、也不是结论来源** —— 回答里的任何数字，'
+            '以及任何结论（包括「未查到」「未生成工单」「处于草稿或审核状态」「数据缺失、已改用累计」'
+            '这类状态判断），都必须以本轮 run_sql 的结果为准；**摘要里写过的也要重新查一遍**。'
+            '② 若与本轮原话或下面【统计范围】冲突，**一律以本轮原话和【统计范围】为准**；'
+            '③ 不要复述这段摘要。')
+    if hist_detail:
         hl = []
-        for i, h in enumerate(history, 1):
+        for i, h in enumerate(hist_detail, 1):
             hl.append('%d) 用户：%s' % (i, h.get('raw_question') or ''))
             hl.append('   系统：%s' % (h.get('answer') or '').replace('\n', ' '))
             hl.append('   当时口径：%s / %s' % (h.get('time_text') or '-', h.get('place') or '-'))
@@ -398,7 +501,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             '注意三点：① 历史里的数字是按**当时的口径**算出来的，不能当成本轮答案；'
             '本轮必须按下面【统计范围】重新查数。'
             '② 本轮的统计口径已在上面的【统计范围】里定好，**不要**因为历史而改变它。'
-            '③ 不要在回答里复述或提及这段历史。' % (len(history), '\n'.join(hl)))
+            '③ 不要在回答里复述或提及这段历史。' % (len(hist_detail), '\n'.join(hl)))
     # 统计范围必须明确交给模型：六项指标是按「范围 + 期间」预计算的，
     # 不给这一句，它就得自己猜该取 month 还是 yearToDate、该取哪个月。
     user_content += ('\n\n【统计范围】（已按今天日期算好，直接采用，不要自行推算日期）\n'
@@ -567,6 +670,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         'unverified': blocked,
         'steps': len(trace),
         'history_used': len(history),
+        'history_injected': len(hist_detail),
+        'summary_used': bool(sess_sum.get('summary')),
+        'summary_chars': len(sess_sum.get('summary') or ''),
+        'summary_upto_seq': sum_upto,
+        'summary_skip': sum_skip or None,       # 非空 = 本轮为什么"没注入"摘要（排障用）
     }
     try:
         if gaps.is_gap(answer, blocked):
@@ -589,4 +697,13 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         result['qa_id'] = None
         # flush：不加的话日志重定向到文件时会被缓冲，等于没有输出
         print('[qa_log] 落库失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
+    # L2 会话摘要：**异步、每 N 轮才做一次**（见 config.SUMMARY_EVERY）。
+    # 必须放在落库之后 —— 摘要读的就是刚写进去的这几轮。
+    # 投递失败绝不影响本次回答。
+    try:
+        import session_summary
+        result['summary_queued'] = session_summary.maybe_enqueue(
+            result.get('session_id') or session_id)
+    except Exception as e:                          # noqa: BLE001
+        print('[agent] 投递摘要任务失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
     return result

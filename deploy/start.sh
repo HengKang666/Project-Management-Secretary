@@ -18,6 +18,10 @@ export SECRETARY_HOST="${SECRETARY_HOST:-0.0.0.0}"
 export SECRETARY_PORT="${SECRETARY_PORT:-8200}"
 export PYTHONIOENCODING=utf-8
 
+# 检索面：问答与补全检索哪些知识库（逗号分隔，可多个）。
+# 不设的话会退回 config.py 里的单库默认值（r57xtq9ypm）。库必须已加进检索服务的绑定范围，否则 401。
+export SECRETARY_KB_IDS="${SECRETARY_KB_IDS:-r57xtq9ypm,razubo7dra}"
+
 PY="${PYTHON:-python3}"
 
 if ! command -v "$PY" >/dev/null 2>&1; then

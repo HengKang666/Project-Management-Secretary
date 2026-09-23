@@ -151,13 +151,78 @@ PROMPTS = [x for x in os.environ.get('SECRETARY_PROMPTS',
     'answer_agent,business_rules,sql_plan_rules').replace(' ', '').split(',') if x]
 
 # 上游「信息补全」工作流应用（含机构名自动纠错，如 凉水供电所→两水供电所）。
-# 出参 = 纠正后的问题 + 统计时间（本月/上月）。本服务在模型循环之前先调它，再叠加知识库补全。
+# 已不在问答链路里，但 tools_app.py 还在用它，保留以免打断那个工具。
 COMPLETION_APP_ID = os.environ.get('SECRETARY_COMPLETION_APP', 'e207644fd37247af957b7fbc613e6efc')
 COMPLETION_URL = (LLM_BASE.split('/compatible-mode')[0] +
                   '/api/v1/apps/' + COMPLETION_APP_ID + '/completion')
 
+# 是否在系统提示**最前面**加一段「规则优先级声明」（内容见 agent.RULES_PRIORITY，默认开）。
+# 为什么需要：system 里的通用规则会和 user 段【统计范围】撞车 —— 典型是
+# `business_rules【时间处理】`写着"未指定年份时默认使用当前年份"，而代码在多轮会话里
+# 会按"沿用上一轮"给出**别的**年份；原文任何地方都没声明谁优先。
+# ★ 这是**纯新增**，不删改任何既有规则，出问题设 0 即恢复原状。
+RULES_PRIORITY = (os.environ.get('SECRETARY_RULES_PRIORITY') or '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+
 # 工具调用步数上限：0 = 不设上限（由模型自己决定什么时候收手）
 MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))
+
+# HTTP 接口的**防呆上限**：历史对话类接口（/api/sessions、/api/history）在「要求全部返回」时，
+# 一次最多给这么多条，超出的截断，并在响应里带 truncated=true 让调用方知道被截了。
+# 为什么要它：这两个接口现在默认就是「全部返回」，历史数据涨到几万条时一次塞进一个 JSON 响应，
+# 服务端序列化与前端渲染都会很难受。要更多就用 limit+offset 分页取。
+API_MAX_ROWS = int(os.environ.get('SECRETARY_API_MAX_ROWS', '5000'))
+
+# 知识库「原文件 + 抽出的富文本」的存放位置（2026-09-22 新增，配合 /api/kb/files/**）。
+#   原文件 → 落磁盘：KB_FILE_ROOT/{index_id}/{md5}/{原文件名}
+#   富文本 → 入库（agent_data 的 t_kb_file / t_kb_file_page，按页存 HTML）
+# 为什么原文件不入库：几十上百 MB 的二进制塞 BLOB 会把备份、查询、迁移全拖慢；
+# 而且将来换成本地内网部署时，本地磁盘本来就是这个位置最适合。
+KB_FILE_ROOT = os.environ.get('SECRETARY_KB_FILES') or os.path.join(os.path.dirname(HERE), 'kb_files')
+
+# 知识库「单库模式」（2026-09-22 新增，默认**开**）：
+#   开：服务端只暴露一个知识库（DEFAULT_INDEX_ID）—— 列表接口只返回它，
+#       路径/参数里传别的 index_id 一律被忽略（并打日志留痕）。
+#   关（SECRETARY_KB_SINGLE=0）：恢复"能看能操作业务空间下全部知识库"的老行为。
+# ★ 为什么必须在服务端做：前端不显示只是"看不见"，只要接口还能指定 index_id，
+#   换个 ID 照样能操作别的库 —— 那是障眼法，不是隔离。
+KB_SINGLE_INDEX = (os.environ.get('SECRETARY_KB_SINGLE') or '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+
+# 上传文档是否**默认走异步**（2026-09-22 新增，默认 0 = 保持同步）。
+#   0：POST .../documents 同步等云端完成（最长 300 秒）后才返回 —— 对现有前端零影响。
+#   1：默认立刻返回 task_id，用 GET /api/kb/uploads/{task_id} 轮询。
+#   单个请求仍可用 ?async=1 / ?async=0 覆盖这个默认值。
+#   什么时候改成 1：同事的前端接完异步轮询之后。
+KB_UPLOAD_ASYNC_DEFAULT = (os.environ.get('SECRETARY_KB_ASYNC_DEFAULT') or '0').strip().lower() \
+    in ('1', 'true', 'yes', 'on')
+
+# L2 会话摘要（2026-09-22 新增）：把一场会话的早期轮次压成一段话，续聊时注进提示，
+# 这样"翻出一场很久以前的会话继续聊"时，模型不至于只知道最近的几轮。
+#   SESSION_SUMMARY  ：总开关，0 = 关（既不生成也不注入）
+#   SUMMARY_EVERY    ：未摘要的问答轮数攒够多少才触发一次
+#   SUMMARY_MODEL    ：摘要用哪个模型；留空 = 用主模型（想省钱可填 flash 级）
+#   SUMMARY_MAX_CHARS：摘要正文长度上限（字）。★ 与 SUMMARIZE_SYSTEM 里写的 150 对齐。
+#                     2026-09-22 从 300 降到 150：实测 300 字时摘要会堆到 6~7 条并列断言，
+#                     在 user_content 里占比过大，反而稀释了本轮问题与【统计范围】。
+SESSION_SUMMARY = (os.environ.get('SECRETARY_SESSION_SUMMARY') or '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+SUMMARY_EVERY = int(os.environ.get('SECRETARY_SUMMARY_EVERY', '5'))
+SUMMARY_MODEL = (os.environ.get('SECRETARY_SUMMARY_MODEL') or '').strip()
+SUMMARY_MAX_CHARS = int(os.environ.get('SECRETARY_SUMMARY_MAX_CHARS', '150'))
+# 最近几轮**无论有没有被摘要覆盖，都原样带进【对话历史】**。
+# 为什么要这个：摘要再准也是压缩过的，"那售电量呢"这种紧跟上一轮的追问，
+# 看原话比看摘要可靠得多。实测发现：只靠摘要时，紧邻几轮的明细会被完全替掉
+# （history_injected=0），追问的精细度会下降。
+# ★ 这两个"始终原样带"的轮次**不会再被写进摘要**（见 session_summary._summarize），
+#   否则同一件事在提示里出现两遍：白烧 token，还让摘要里的旧口径更容易干扰本轮。
+SUMMARY_KEEP_RECENT = int(os.environ.get('SECRETARY_SUMMARY_KEEP_RECENT', '2'))
+# 会话**总轮数**达到这个值，才值得把摘要注进提示。
+# 为什么需要：HISTORY_TURNS 默认 5，短会话（≤5 轮）的 history 本来就把全场带上了，
+# 再注入一段摘要纯属重复 —— 实测短会话里摘要与【对话历史】内容几乎完全重叠。
+# 设 0 = 不设门槛（老行为）。
+SUMMARY_MIN_TURNS = int(os.environ.get('SECRETARY_SUMMARY_MIN_TURNS', '6'))
+
 SQL_MAX_ROWS = 200
 SQL_TIMEOUT_MS = 25000
 HTTP_TIMEOUT = 120
