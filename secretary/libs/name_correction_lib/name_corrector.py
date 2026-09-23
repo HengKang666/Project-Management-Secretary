@@ -381,6 +381,20 @@ def _area_core(name: str) -> str:
     return s
 
 
+def _core_tail_cut(frag: str) -> int:
+    """返回 `_area_core` 会从末尾剥掉的字符数（只算「≥4 位连续数字」那一步）。
+
+    为什么调用方需要它：查库用的是**剥掉编号后的核心**，可替换范围若仍覆盖那几个数字，
+    就会把不属于名字的内容一起吃掉 ——
+    实测「凉水2025售电量」被整段换成「两水供电所」，年份「2025」当场消失，
+    下游 time_scope 于是以为用户没提时间，按「今年至今」答。
+    """
+    i = len(frag)
+    while i > 0 and frag[i - 1].isdigit():
+        i -= 1
+    return len(frag) - i if i >= 2 and len(frag) - i >= 4 else 0
+
+
 def _only_suffix(frag: str) -> bool:
     """整个片段是不是**只由类型词组成**（「变压器」「台区」「变压器台区」「公变」）。
 
@@ -1578,6 +1592,14 @@ class Corrector:
                     break
                 if not HAN.search(frag):
                     continue              # 纯数字不成名字
+                # **结尾**同样不许落在已知词内部 —— 上面只管了起点。
+                # `inside_word[k]` 标的是「词内部」的位置（词首不算），所以
+                # i+L 落在里面 = 这个片段把某个词从中间截断了。
+                # 漏掉这一条，「凉水｜售电量」会被切成「凉水售」，
+                # 而「凉水售」的相似度恰好对上库里的「凉水沟变压器」，
+                # 整句变成「凉水沟变压器电量2025」——地名没了、指标也被吃掉一个字。
+                if inside_word[i + L]:
+                    continue
                 if blocked(i, i + L):
                     continue              # 已经在某个标准名里面
                 key = normalize(frag)
@@ -1602,7 +1624,14 @@ class Corrector:
                     nxt = text[i + L] if i + L < n else ""
                     if nxt and nxt in ADMIN_TAIL_CHARS:
                         continue
-                    found.append((i, i + L, frag))
+                    # 末尾 ≥4 位数字是内部编号（`_area_core` 比对时已剥掉），
+                    # **不算名字的一部分**，替换范围要把它留在原处。
+                    # 不这么做，「凉水2025售电量」会被整段换成「两水供电所」，
+                    # 年份 2025 连同年份口径一起丢掉。
+                    end = i + L - _core_tail_cut(frag)
+                    if end - i < 2:
+                        continue
+                    found.append((i, end, text[i:end]))
                     break
 
         found.sort(key=lambda x: (x[0], -(x[1] - x[0])))
