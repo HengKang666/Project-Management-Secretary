@@ -147,8 +147,10 @@ TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').spl
 #   business_rules 共享业务规则（deleted_flag / 单位 / 层级 / 时间处理）
 #   sql_plan_rules ←【待他们新增】「先拆解任务、再一次性发出互不依赖的查询」这条约束
 #                    （原 `question_splitter` 目前是“原样透传、不做补全”，不能直接用）
+#   work_order_rules 缺陷工单取数口径（默认排除草稿 work_status=0）
+#                    2026-09-23 新增，行在 ai_prompt id=40；改这条规则只改库，不改代码
 PROMPTS = [x for x in os.environ.get('SECRETARY_PROMPTS',
-    'answer_agent,business_rules,sql_plan_rules').replace(' ', '').split(',') if x]
+    'answer_agent,business_rules,sql_plan_rules,work_order_rules').replace(' ', '').split(',') if x]
 
 # 上游「信息补全」工作流应用（含机构名自动纠错，如 凉水供电所→两水供电所）。
 # 已不在问答链路里，但 tools_app.py 还在用它，保留以免打断那个工具。

@@ -100,7 +100,7 @@
 |---|---|---|
 | 业务库 dlj_data | 业务表（真数据） | **严格只读**，run_sql 取数 |
 | 业务字典 ai_data | `ai_table_metadata` / `ai_column_metadata` / `ai_metric_metadata` / `ai_column_synonym` / `ai_table_relation` | 只读；semantic.py 启动时读进内存 |
-| 系统提示词 ai_data.ai_prompt | 三道：`answer_agent`（回答纪律）/ `business_rules`（业务规则）/ `sql_plan_rules`（查询规划）| 只读，**版本化**（取 `IS_new=1` 的最新一行，60 秒 TTL）。<br>★ **改提示词改库、不用改代码** |
+| 系统提示词 ai_data.ai_prompt | 四道：`answer_agent`（回答纪律）/ `business_rules`（业务规则）/ `sql_plan_rules`（查询规划）/ `work_order_rules`（缺陷工单取数口径：默认排除草稿 work_status=0）| 只读，**版本化**（取 `IS_new=1` 的最新一行，60 秒 TTL）。<br>★ **改提示词改库、不用改代码**（`config.PROMPTS` 决定注入哪几道；加一道要重启服务，改内容 60 秒自动生效） |
 | 知识库（检索面） | `r57xtq9ypm`（ai大脑通用语义知识库）+ `razubo7dra`（个人知识库）| kb_search 检索切片，用于**补全规则**与问答 |
 | 记录库 agent_data | **本项目自建**：对话记录、知识库文件台账、纠错词典 | **读写**（唯一有写权限的库）|
 
