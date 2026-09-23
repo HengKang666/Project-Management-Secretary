@@ -325,10 +325,13 @@
    },
    "scope": "国网随县供电公司",
    "title_rule": {
-    "count_sql": "SELECT COUNT(*) AS n, SUM(CASE WHEN DATEDIFF('{today}', create_time) > 90 THEN 1 ELSE 0 END) AS overdue FROM t_work_order_audit_task WHERE task_status=0 AND is_deleted=0 AND node_name='县公司财务部审核'",
-    "template": "今天有 {n} 个项目在县公司财务部审核节点待办，其中 {overdue} 个已积压超90天",
-    "zero": "今天无待审批项目",
-    "note": "待办维度：审批任务表 task_status=0 + 本节点；停留按创建时间估算（本表无进入节点时间字段）"
+    "count_metrics": [
+     "approval_pending_count",
+     "approval_pending_overdue_90d"
+    ],
+    "node": "县公司财务部审核",
+    "template": "今天有 {approval_pending_count} 个项目在县公司财务部审核节点待办，其中 {approval_pending_overdue_90d} 个已积压超90天",
+    "zero": "今天无待审批项目"
    }
   },
   {
@@ -546,10 +549,11 @@
    },
    "scope": "全市",
    "title_rule": {
-    "count_sql": "SELECT COUNT(*) AS n FROM t_power_work_order WHERE deleted_flag='0' AND DATE(create_time)='{today}'",
-    "template": "今天有 {n} 笔新增申请需要做资金合理性检查",
-    "zero": "今天无资金明显不合理的申请",
-    "note": "当天新增申请维度；资金合理性需再与当年可用余额比对"
+    "count_metrics": [
+     "apply_new_today_count"
+    ],
+    "template": "今天有 {apply_new_today_count} 笔新增申请需要做资金合理性检查",
+    "zero": "今天无资金明显不合理的申请"
    }
   },
   {
@@ -590,10 +594,11 @@
    },
    "scope": "文峰供电所",
    "title_rule": {
-    "count_sql": "SELECT COUNT(*) AS n FROM t_power_work_order WHERE deleted_flag='0' AND power_company_name='{scope}' AND work_status IN (3,6,7) AND DATEDIFF('{today}', create_time) > 90",
-    "template": "今天有 {n} 个项目在{scope}停超90天未推进",
-    "zero": "今天无项目逾期",
-    "note": "逾期维度需计划完工日（99%为空，用不了）→ 退回停留超阈维度（>90天）"
+    "count_metrics": [
+     "project_stalled_90d_count"
+    ],
+    "template": "今天有 {project_stalled_90d_count} 个项目在{scope}停超90天未推进",
+    "zero": "今天无项目逾期"
    }
   },
   {
@@ -639,10 +644,11 @@
    },
    "scope": "均川供电所",
    "title_rule": {
-    "count_sql": "SELECT COUNT(*) AS n FROM (SELECT w.id FROM t_power_work_order w WHERE w.deleted_flag='0' AND w.power_company_name='{scope}' AND w.work_status IN (3,6) AND w.reality_total > 0 AND DATEDIFF('{today}', w.create_time) > 90 ORDER BY w.reality_total DESC LIMIT 10) t",
-    "template": "今天有 {n} 个项目钱花了没动",
-    "zero": "今天无进度异常项目",
-    "note": "钱花了没动维度：已发生金额本所前10且状态停3/6超90天"
+    "count_metrics": [
+     "project_spent_not_moved_count"
+    ],
+    "template": "今天有 {project_spent_not_moved_count} 个项目钱花了没动",
+    "zero": "今天无进度异常项目"
    }
   }
  ]

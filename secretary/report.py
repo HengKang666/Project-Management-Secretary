@@ -5,6 +5,7 @@
 换一年、换一个所、换一个分析主题都只改文档，不改代码。
 """
 import os
+import re
 import time
 
 import agent
@@ -127,6 +128,63 @@ def _parse_title(answer):
     return None, '', False
 
 
+_METRIC_STOP = set('and or in not null limit order by desc asc where is count sum avg max min'.split())
+
+
+def _cols_of(conds):
+    """从条件里解析出列名：先去掉字符串字面量、{占位符}、函数名，再取标识符。"""
+    s = re.sub(r"'[^']*'", ' ', conds)
+    s = re.sub(r'\{[^}]*\}', ' ', s)
+    s = re.sub(r'\b[a-z_]+\s*\(', ' ', s)
+    return sorted(set(re.findall(r'([a-z_]{3,})', s)) - _METRIC_STOP)
+
+
+def _tables_with(cols):
+    """同时登记了这些列的表（字典决定归属）—— 公式里因此**不用写表名**。"""
+    ph = ','.join("'%s'" % x for x in cols)
+    rows = semantic._rows('SELECT table_name AS t, COUNT(*) AS n FROM ai_data.ai_column_metadata '
+                          'WHERE column_name IN (%s) GROUP BY table_name HAVING n = %d' % (ph, len(cols)))
+    return [r['t'] for r in rows]
+
+
+def _metric_formula(code):
+    for r in semantic._rows("SELECT metric_code, metric_name, metric_formula, unit FROM ai_data.ai_metric_metadata "
+                            "WHERE metric_code = '%s'" % str(code).strip().replace("'", "")):
+        return r
+    return None
+
+
+def metric_sql(code, params):
+    """指标口径（字典里的 metric_formula）-> 可执行 SQL。
+
+    **公式里不写表名**：表由列字典按公式用到的列定位（换库/换表名只改字典，公式与代码都不动）。
+    返回 (sql, table)；定位不唯一或格式不认识时返回 (None, 原因)。
+    """
+    m = _metric_formula(code)
+    if not m:
+        return None, '字典里没有这个指标：%s' % code
+    f = (m.get('metric_formula') or '').strip()
+    if ' where ' not in f:
+        return None, '指标公式格式不认识（需要 "聚合 where 条件"）：%s' % f
+    agg, conds = f.split(' where ', 1)
+    today = params.get('today') or time.strftime('%Y-%m-%d')
+    conds = re.sub(r'days_since\(\s*([a-z_]+)\s*\)',
+                   lambda mo: "DATEDIFF('%s', %s)" % (today, mo.group(1)), conds)
+    cols = _cols_of(conds)
+    if not cols:
+        return None, '公式里没解析出列：%s' % f
+    tables = _tables_with(cols)
+    if len(tables) != 1:
+        return None, ('公式用到的列（%s）对应 %d 张表，无法唯一定位：%s'
+                      % (','.join(cols), len(tables), ','.join(tables)))
+    for k in ('today', 'scope', 'account', 'node'):
+        if k in params:
+            conds = conds.replace('{%s}' % k, str(params[k]))
+    if '{' in conds:
+        return None, '公式里还有没替换的占位符：%s' % conds
+    return ('SELECT (%s) AS n FROM %s WHERE %s' % (agg.strip(), tables[0], conds)), tables[0]
+
+
 def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=None, today=None):
     """定时触发专用：**只回一个标题**。
 
@@ -154,35 +212,41 @@ def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=
     who_role = sk.get('role') or tu.get('role') or ''
     who_scope = scope or sk.get('scope') or tu.get('dept') or '全部'
     now = when or time.strftime('%Y-%m-%d %H:%M:%S')
+    # 业务日期：上游传；没传才用服务器日期。**必须在下面任何用到 today 的地方之前**
+    # （合并 4.5 时默认值被排到了后面，导致不传 today 时 replace() 收到 None 而报错）。
+    today = today or time.strftime('%Y-%m-%d')
 
     # ---- 声明式计数（**默认路径**）：计数查询写在技能配置的 title_rule 里，这里直接执行 ----
     # 为什么不让模型数：模型每次现写 SQL，同一请求会数出 13/5/0 三种结果（实测）。
     # 口径属于标准层 —— 放在技能配置里，业务能改、改了不用发版；模型只负责措辞（其实是模板）。
     rule = sk.get('title_rule') or {}
-    csql = (rule.get('count_sql') or '').strip()
-    if csql:
-        sql2 = (csql.replace('{today}', today).replace('{scope}', who_scope)
-                    .replace('{account}', account or ''))
-        try:
-            row = (tools_db.run_sql(sql2).get('rows') or [{}])[0]
-        except Exception as e:                      # noqa: BLE001
-            row = None
-            err = '%s: %s' % (type(e).__name__, str(e)[:200])
-        if row is None:
+    metric_codes = rule.get('count_metrics') or ([rule.get('count_metric')] if rule.get('count_metric') else [])
+    if metric_codes:
+        params = {'today': today, 'scope': who_scope, 'account': account or '',
+                  'node': rule.get('node') or who_role or ''}
+        vals, sqls, err = {}, [], None
+        for code in metric_codes:
+            sql, tb = metric_sql(code, params)
+            if not sql:
+                err = tb
+                break
+            sqls.append(sql)
+            try:
+                row = (tools_db.run_sql(sql).get('rows') or [{}])[0]
+                vals[code] = int(list(row.values())[0] or 0)
+            except Exception as e:                      # noqa: BLE001
+                err = '%s: %s' % (type(e).__name__, str(e)[:200])
+                break
+        if err:
             return {'skill_id': skill_id, 'name': sk.get('name'), 'status': 'unknown', 'count': None,
-                    'title': (sk.get('name') or skill_id) + '：计数查询执行失败，请人工核对',
+                    'title': (sk.get('name') or skill_id) + '：计数口径没取到，请人工核对',
                     'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'), 'today': today,
                     'triggered_at': now, 'account': account or '', 'role': who_role, 'scope': who_scope,
-                    'sql': [sql2], 'error': err, 'mode': 'declared',
+                    'sql': sqls, 'error': err, 'mode': 'metric',
                     'elapsed_ms': int((time.time() - t0) * 1000)}
-        vals = {}
-        for k, v in row.items():
-            try:
-                vals[k] = int(v) if v is not None and str(v).strip() not in ('', 'None') else 0
-            except Exception:
-                vals[k] = v
-        vals.update({'scope': who_scope, 'account': account or '', 'today': today})
-        n = vals.get('n', 0)
+        vals.update({'scope': who_scope, 'account': account or '', 'today': today,
+                     'n': vals.get(metric_codes[0], 0)})
+        n = vals['n']
         tmpl = rule.get('zero') or '今天无异常'
         if n:
             try:
@@ -193,10 +257,9 @@ def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=
                 'status': 'abnormal' if n else 'ok', 'count': n, 'title': tmpl,
                 'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'), 'today': today,
                 'triggered_at': now, 'account': account or '', 'role': who_role, 'scope': who_scope,
-                'sql': [sql2], 'mode': 'declared',
-                'by_dimension': {k: v for k, v in vals.items() if k not in ('scope', 'account', 'today')},
+                'sql': sqls, 'mode': 'metric',
+                'by_metric': {k: v for k, v in vals.items() if k in metric_codes},
                 'elapsed_ms': int((time.time() - t0) * 1000)}
-    today = today or time.strftime('%Y-%m-%d')   # 业务上的「今天」由上游传，没传才用服务器日期
     user = ('你的身份：%s。数据范围：%s。**所有数据只能取这个范围内。**\n' % (who_role or '（未定）', who_scope))
     if account:
         user += '上游传过来的账号：%s\n' % account
